@@ -23,8 +23,8 @@
 #include <HDU/hduError.h>
 #include <HDU/hduVector.h>
 
-#define VMAX  -50.5554f
-#define VMIN  -339.6040f
+#define VMAX  -51.0f
+#define VMIN  -339.0f
 
 using namespace std;
 
@@ -52,8 +52,9 @@ vector<float> p_prv_pos {0,0,0};
 vector<float> p_speed {0,0,0};
 vector<float> p_prv_force {0,0,0};
 float K = 0.25f;
-float K_spring = 1.0f;
+float K_spring = 0.75f;
 float epsilon = 0.00001f;
+float pos_epsilon = 0.01f;
 vector<float> Ai;
 vector<float> Bi;
 vector<float> fi;
@@ -81,9 +82,7 @@ public:
 		m_thread = new boost::thread(boost::bind(static_cast<size_t (boost::asio::io_service::*)()>(&boost::asio::io_service::run), &t_read_service));
 		timer->async_wait(boost::bind(&haptuator::run,this));
 	}
-	void stop(){
-		m_thread->detach();
-	}
+
 	float waveform(float t) {
 
 		int i;
@@ -99,19 +98,20 @@ public:
 		float acceleration;
 		if (t <= 0.1f)
 		{
-			t += 0.000001f ;
+			t += 0.00001f ;
 			acceleration = waveform(t);
-			//			cout << acceleration << endl;
+//						cout << acceleration << endl;
 
-			f_data << acceleration << endl;
+			//	f_data << acceleration << endl;
 			if (COMEDI_ERROR == m_daq->writeData(COMEDI_AN_OUT_SUB,COMEDI_MOTOR_OUT,COMEDI_RANGE,AREF_GROUND,acceleration))
 				printf("Error writing to DAQ board");
 		} else {
 			//	count = 0;
 			acceleration = 0.0f;
-			boost::this_thread::sleep( boost::posix_time::microseconds(TIMER_HAPTUATOR) );
+			boost::this_thread::sleep( boost::posix_time::milliseconds(100));
 		}
 		timer->async_wait(boost::bind(&haptuator::run,this));
+
 		return;
 
 	}
@@ -240,7 +240,6 @@ void phantomRun()
 }
 HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 {
-	float speed;
 	p_prv_pos = p_cur_pos;
 	for (int i = 0;i<3;i++){
 		p_prv_force[i] = force[i];
@@ -266,8 +265,6 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 
 	//cout << "Pos: " << p_cur_pos[0] << "   " << p_cur_pos[1] << "   " << p_cur_pos[2] << endl;
 
-
-
 	if (p_cur_pos[1] > 0)
 		force[1] =  0;
 	else
@@ -276,13 +273,17 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 	force[2] = -K * p_cur_pos[2];
 
 	force[0] = -K * p_cur_pos[0];;
+
 	Saturation(force);
-	//	cout << "Force: " << force[0] << "   " << force[1] << "   " << force[2] << endl;
+	//cout << "Force: " << force[0] << "   " << force[1] << "   " << force[2] << endl;
+
+	hdSetDoublev(HD_CURRENT_FORCE, force);
+	hdEndFrame(hdGetCurrentDevice());
 
 	if ((p_prv_force[1] <= epsilon) && (p_cur_pos[1] < p_prv_pos[1]) && (force[1] >= epsilon))
 	{
-		cout << "Control the haptuator " << endl;
-		cout << "Speed: " << p_speed[1] << endl;
+	//	cout << "Control the haptuator " << endl;
+	//	cout << "Speed: " << p_speed[1] << endl;
 
 		speed = p_speed[1];
 		if (speed >= VMAX)
@@ -290,31 +291,37 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 		else if (speed <= VMIN)
 			speed = VMIN;
 
+//		cout << "Speed: " << speed << endl;
+
 		A0 = data_parser.speedInterpA0(speed);
 		Ai = data_parser.speedInterpA(speed);
 		Bi = data_parser.speedInterpB(speed);
 
-		cout << "A0: " << endl;
-		cout << A0 << endl;
-
-		cout << "Ai: " << endl;
-		for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
-			cout << ' ' << *it;
-		cout << '\n';
-
-		cout << "Bi: " << endl;
-		for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
-			cout << ' ' << *it;
-		cout << '\n';
+		//		cout << "A0: " << endl;
+		//		cout << A0 << endl;
+		//
+		//		cout << "Ai: " << endl;
+		//		for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
+		//			cout << ' ' << *it;
+		//		cout << '\n';
+		//
+		//		cout << "Bi: " << endl;
+		//		for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
+		//			cout << ' ' << *it;
+		//		cout << '\n';
 
 		hap->setInterpolationData(A0,Ai,Bi,fi);
-		cout << "Playing the haptuator" << endl;
+		//		cout << "Playing the haptuator" << endl;
 		if (hap->isDataLoaded())
 			hap->start();
 	}
 
-	hdSetDoublev(HD_CURRENT_FORCE, force);
-	hdEndFrame(hdGetCurrentDevice());
+
+
+	//	force[2] = -K * p_cur_pos[2];
+
+	//	force[0] = -K * p_cur_pos[0];;
+
 	return HD_CALLBACK_CONTINUE;
 }
 /*
@@ -326,16 +333,25 @@ void keyPress(){
 	cout<<"Press <s> to start phantom."<<endl;
 	cout<<"Press <q> to exit the program."<<endl;
 	string filename;
-	float speed;
-
+	char c;
 	char lastKey;
 	while (true) {
 		cin >> lastKey;
 		switch ( lastKey ) {
 		case 'l':
 
-			cout << "Put file name" << endl;
-			cin >> filename;
+			cout << "Load default data ? Y/N " << endl;
+			cin >> c;
+			if (c == 'Y' || c == 'y'){
+				filename = "driven_data.txt";
+				cout << "Default driven data file " << filename << endl;
+			}
+			else
+			{
+				cout << "Filename: " << endl;
+				cin >> filename;
+			}
+
 			cout << "Loading drive data" << endl;
 			if(data_parser.loadData(filename))
 			{
@@ -436,7 +452,7 @@ int main(int argc, char *argv[]) {
 	phantomOpen();
 	hPhantomMain = hdScheduleAsynchronous(phantom_callback, 0, HD_MAX_SCHEDULER_PRIORITY);
 
-	f_data.open("data.txt",std::fstream::out);
+//	f_data.open("data.txt",std::fstream::out);
 
 	/* Thread for key press*/
 	boost::thread key_thread(&keyPress);

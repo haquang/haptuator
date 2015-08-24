@@ -78,40 +78,9 @@ bool DriveDataParser::loadData(string filename) {
 		_gsl_acc = gsl_interp_accel_alloc ();
 		_gsl_spline = gsl_spline_alloc(gsl_interp_cspline, s_speed);
 
-//				cout << "Speed: " << endl;
-//				for (vector<float>::iterator it = ref_speed.begin() ; it != ref_speed.end(); ++it)
-//					cout << ' ' << *it;
-//				cout << '\n';
-
-//					cout << "A0: " << endl;
-//					for (vector<float>::iterator it = A0.begin() ; it != A0.end(); ++it)
-//						cout << ' ' << *it;
-//					cout << '\n';
-		//
-//					cout << "A1: " << endl;
-//					for (vector<float>::iterator it = A[0].begin() ; it != A[0].end(); ++it)
-//						cout << ' ' << *it;
-//					cout << '\n';
-
-//					cout << "A: " << endl;
-//					vector< vector<float> >::iterator row;
-//					vector<float>::iterator col;
-//					for (row = A.begin(); row != A.end(); row++) {
-//						for (col = row->begin(); col != row->end(); col++) {
-//							 cout << *col << "  ";
-//						}
-//						cout << endl;
-//					}
-		//
-		//			cout << "B: " << endl;
-		//
-		//			for (row = B.begin(); row != B.end(); row++) {
-		//				for (col = row->begin(); col != row->end(); col++) {
-		//					 cout << *col << "  ";
-		//				}
-		//				cout << endl;
-		//			}
 		return true;
+	} else {
+		std::cout << "Error reading file!" << endl;
 	}
 	return false;
 }
