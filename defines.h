@@ -17,7 +17,8 @@
 #define COMEDI_MOTOR_OUT 0
 #define COMEDI_ENC 1
 #define COMEDI_ADC_IN 0
-
+#define ACC_POWER_SUPPLY_PORT 1
+#define ACC_CAL_SIZE 100
 
 #define TIMER_SCHEDULE 1000
 

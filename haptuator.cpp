@@ -16,6 +16,7 @@
 #include <boost/bind.hpp>
 #include <boost/thread.hpp>
 #include "daqdevice.h"
+#include "daqacc.h"
 #include "drivedataparser.h"
 
 
@@ -28,11 +29,15 @@
 
 using namespace std;
 
+enum mode{RECORD,RUN};
+mode MODE;
+int i_record_count = 1;
 /* Global variable*/
 fstream f_data;
 DaqDevice* m_daq;
 DriveDataParser data_parser;
 float speed = 0;
+DaqAcc* m_daq_acc;
 
 // Phantom device
 const int DT_MAX=5000;
@@ -100,7 +105,7 @@ public:
 		{
 			t += 0.00001f ;
 			acceleration = waveform(t);
-//						cout << acceleration << endl;
+			//						cout << acceleration << endl;
 
 			//	f_data << acceleration << endl;
 			if (COMEDI_ERROR == m_daq->writeData(COMEDI_AN_OUT_SUB,COMEDI_MOTOR_OUT,COMEDI_RANGE,AREF_GROUND,acceleration))
@@ -240,6 +245,7 @@ void phantomRun()
 }
 HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 {
+	float f_acc;
 	p_prv_pos = p_cur_pos;
 	for (int i = 0;i<3;i++){
 		p_prv_force[i] = force[i];
@@ -277,50 +283,52 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 	Saturation(force);
 	//cout << "Force: " << force[0] << "   " << force[1] << "   " << force[2] << endl;
 
-	hdSetDoublev(HD_CURRENT_FORCE, force);
+	if (RUN == MODE)
+		hdSetDoublev(HD_CURRENT_FORCE, force); // Only output force in running mode
+
 	hdEndFrame(hdGetCurrentDevice());
 
-	if ((p_prv_force[1] <= epsilon) && (p_cur_pos[1] < p_prv_pos[1]) && (force[1] >= epsilon))
-	{
-	//	cout << "Control the haptuator " << endl;
-	//	cout << "Speed: " << p_speed[1] << endl;
+	if (RUN == MODE){ // RUNNING MODE
+		if ((p_prv_force[1] <= epsilon) && (p_cur_pos[1] < p_prv_pos[1]) && (force[1] >= epsilon))
+			{
+				//	cout << "Control the haptuator " << endl;
+				//	cout << "Speed: " << p_speed[1] << endl;
 
-		speed = p_speed[1];
-		if (speed >= VMAX)
-			speed = VMAX;
-		else if (speed <= VMIN)
-			speed = VMIN;
+				speed = p_speed[1];
+				if (speed >= VMAX)
+					speed = VMAX;
+				else if (speed <= VMIN)
+					speed = VMIN;
 
-//		cout << "Speed: " << speed << endl;
+				//		cout << "Speed: " << speed << endl;
 
-		A0 = data_parser.speedInterpA0(speed);
-		Ai = data_parser.speedInterpA(speed);
-		Bi = data_parser.speedInterpB(speed);
+				A0 = data_parser.speedInterpA0(speed);
+				Ai = data_parser.speedInterpA(speed);
+				Bi = data_parser.speedInterpB(speed);
 
-		//		cout << "A0: " << endl;
-		//		cout << A0 << endl;
-		//
-		//		cout << "Ai: " << endl;
-		//		for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
-		//			cout << ' ' << *it;
-		//		cout << '\n';
-		//
-		//		cout << "Bi: " << endl;
-		//		for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
-		//			cout << ' ' << *it;
-		//		cout << '\n';
+				//		cout << "A0: " << endl;
+				//		cout << A0 << endl;
+				//
+				//		cout << "Ai: " << endl;
+				//		for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
+				//			cout << ' ' << *it;
+				//		cout << '\n';
+				//
+				//		cout << "Bi: " << endl;
+				//		for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
+				//			cout << ' ' << *it;
+				//		cout << '\n';
 
-		hap->setInterpolationData(A0,Ai,Bi,fi);
-		//		cout << "Playing the haptuator" << endl;
-		if (hap->isDataLoaded())
-			hap->start();
+				hap->setInterpolationData(A0,Ai,Bi,fi);
+				//		cout << "Playing the haptuator" << endl;
+				if (hap->isDataLoaded())
+					hap->start();
+			}
+	} else { // RECORDING MODE
+		f_acc = m_daq_acc->getAcc();
+		f_data << p_speed[1] << "  " << f_acc << endl;
 	}
 
-
-
-	//	force[2] = -K * p_cur_pos[2];
-
-	//	force[0] = -K * p_cur_pos[0];;
 
 	return HD_CALLBACK_CONTINUE;
 }
@@ -328,11 +336,13 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
  * Key press function
  */
 void keyPress(){
-	cout<<"Press <r> to start playing the haptuator."<<endl;
+	cout<<"Press <t> to start playing the haptuator (TESTING)."<<endl;
+	cout<<"Press <r> to start recording data."<<endl;
 	cout<<"Press <l> to load the data."<<endl;
 	cout<<"Press <s> to start phantom."<<endl;
 	cout<<"Press <q> to exit the program."<<endl;
 	string filename;
+	std::stringstream ss;
 	char c;
 	char lastKey;
 	while (true) {
@@ -360,7 +370,7 @@ void keyPress(){
 
 
 			break;
-		case 'r':
+		case 't':
 			cout << "Put input speed: " << endl;
 			cin >> speed;
 			// TESTING
@@ -397,8 +407,23 @@ void keyPress(){
 			//	if (hap->isDataLoaded())
 			//		hap->start();
 			break;
+		case 'r':
+			cout << "Start recording data" << endl;
+			MODE = RECORD; // Recording mode
+			if (f_data.is_open())
+				f_data.close();
+			filename = "Test_Acc_N";
+			ss.str("");
+			ss << i_record_count++;
+			filename.append(ss.str());
+			filename.append(".txt");
+			f_data.open(filename.c_str(),std::fstream::out);
+			cout << "Writing data to " << filename << endl;
+			phantomRun();
+			break;
 		case 's':
 			cout << "Start running phantom device" << endl;
+			MODE = RUN; // Running mode
 			phantomRun();
 			break;
 		case 'q':
@@ -413,8 +438,21 @@ void keyPress(){
 
 }
 
+void calibration(const boost::system::error_code& err,boost::asio::deadline_timer* t)
+{
+	if (err)
+		return;
+	if (!m_daq_acc->getCalibrationMode()){
+		printf("Finished calibration\n");
+	} else {
+		m_daq_acc->calibration();
+		t->async_wait(boost::bind(calibration,boost::asio::placeholders::error,t));
+	}
+}
+
 
 int main(int argc, char *argv[]) {
+	float bias_voltage;
 	cout << "Starting....." << endl;
 
 	/* DAQ device*/
@@ -428,18 +466,38 @@ int main(int argc, char *argv[]) {
 		printf("Connected to DAQ board\n");
 	}
 	m_daq = new DaqDevice(device);
-	/* Calibration */
-	if (COMEDI_ERROR == m_daq->DAQcalibration(COMEDI_AN_IN_SUB,COMEDI_ADC_IN,COMEDI_RANGE)) // Analog input
-	{
-		printf("Error calibrating DAQ board - Analog input\n");
-	}
 
+	/* Calibration DAQ for haptuator */
 	if (COMEDI_ERROR == m_daq->DAQcalibration(COMEDI_AN_OUT_SUB,COMEDI_MOTOR_OUT,COMEDI_RANGE)) // Analog output
 	{
 		printf("Error calibrating DAQ board - Analog output\n");
 	}
 	hap = new haptuator(m_daq);
 
+	/*
+	 * Calibrating Accelerator
+	 */
+	m_daq_acc = new DaqAcc(device,COMEDI_AN_IN_SUB,COMEDI_ADC_IN,COMEDI_RANGE);
+	if ((COMEDI_ERROR == m_daq_acc->DAQcalibration(COMEDI_AN_IN_SUB,COMEDI_ADC_IN,COMEDI_RANGE)) || (COMEDI_ERROR == m_daq_acc->DAQcalibration(COMEDI_AN_IN_SUB,ACC_POWER_SUPPLY_PORT,COMEDI_RANGE)))
+	{
+		printf("Error calibrating DAQ board\n");
+	}
+	if (COMEDI_ERROR == m_daq_acc->readSupplyVoltage(ACC_POWER_SUPPLY_PORT)){
+		printf("Error reading power supply voltage for Acc calibration\n");
+	} else {
+		printf("Input voltage: %f\n", m_daq_acc->getSupplyVoltage());
+	}
+	/*Timer for calibration*/
+	boost::asio::io_service t_cali_service;
+	boost::asio::deadline_timer timer_cali(t_cali_service, boost::posix_time::microseconds(1));
+	timer_cali.async_wait(boost::bind(calibration,boost::asio::placeholders::error, &timer_cali));
+
+	m_daq_acc->setCalibrationMode();
+	t_cali_service.run();
+	while (m_daq_acc->getCalibrationMode()){}
+
+	bias_voltage = m_daq_acc->getBiasVol();
+	printf("Bias voltage: %f\n", bias_voltage);
 	/* Rendering frequency*/
 	for (int i = 14;i<=29;i++){
 		fi.push_back(i*5);
@@ -452,7 +510,7 @@ int main(int argc, char *argv[]) {
 	phantomOpen();
 	hPhantomMain = hdScheduleAsynchronous(phantom_callback, 0, HD_MAX_SCHEDULER_PRIORITY);
 
-//	f_data.open("data.txt",std::fstream::out);
+	//	f_data.open("data.txt",std::fstream::out);
 
 	/* Thread for key press*/
 	boost::thread key_thread(&keyPress);
