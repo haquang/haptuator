@@ -20,15 +20,19 @@ public:
 
 	bool loadData(string filename);
 	vector<float> getRefSpeed();
+	vector<float> getFreq();
 	float interp1d(float val,vector<float> input,vector<float> out);
 	float speedInterpA0(float speed); // A0
 	vector<float> speedInterpA(float speed); // A
 	vector<float> speedInterpB(float speed); // B
-
+	float getMaxVel();
+	float getMinVel();
 //	void swap(int i,int j);
-	void sorting();
+//	void sorting();
 private:
 	vector<float> ref_speed; // Reference speed
+	vector<float> freq; // frequency
+	float vmin,vmax;
 	vector<vector<float> > acc_signal;
 
 	vector<float> A0;

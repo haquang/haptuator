@@ -35,7 +35,7 @@ bool DriveDataParser::loadData(string filename) {
 		// read the first line for the size of ref_speed, A,B
 		getline(ifs,line);
 		split << line;
-		split >> s_speed >> s_freq;
+		split >> s_speed >> s_freq >> vmin >> vmax;
 
 		cout<< "Size of Speed :" << s_speed << " and Freq: " << s_freq << endl;
 
@@ -47,7 +47,15 @@ bool DriveDataParser::loadData(string filename) {
 			ref_speed.push_back(f_val);
 		}
 
-		// read the third line for A0
+		// read the third line for frequency
+			getline(ifs,line);
+			split.clear();
+			split << line;
+			while (split >> f_val){
+				freq.push_back(f_val);
+			}
+
+		// read the fourth line for A0
 		getline(ifs,line);
 		split.clear();
 		split.str(line);
@@ -88,6 +96,13 @@ bool DriveDataParser::loadData(string filename) {
 vector<float> DriveDataParser::getRefSpeed() {
 	return ref_speed;
 }
+float DriveDataParser::getMaxVel(){
+	return vmax;
+}
+
+float DriveDataParser::getMinVel(){
+	return vmin;
+}
 
 float DriveDataParser::interp1d(float val, vector<float> in,vector<float> out) {
 		double  *x, *y;
@@ -121,6 +136,10 @@ vector<float> DriveDataParser::speedInterpA(float speed) {
 	}
 
 	return result;
+}
+
+vector<float> DriveDataParser::getFreq() {
+	return freq;
 }
 
 vector<float> DriveDataParser::speedInterpB(float speed) {

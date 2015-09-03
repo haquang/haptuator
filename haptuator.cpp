@@ -15,6 +15,8 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/bind.hpp>
 #include <boost/thread.hpp>
+#include <numeric>
+#include <queue>
 #include "daqdevice.h"
 #include "daqacc.h"
 #include "drivedataparser.h"
@@ -24,12 +26,9 @@
 #include <HDU/hduError.h>
 #include <HDU/hduVector.h>
 
-#define VMAX  -51.0f
-#define VMIN  -339.0f
-
 using namespace std;
 
-enum mode{RECORD,RUN};
+enum mode{RECORD_TAP,RECORD_DRAG,TAP,DRAG};
 mode MODE;
 int i_record_count = 1;
 /* Global variable*/
@@ -56,6 +55,11 @@ vector<float> p_cur_pos {0,0,0};
 vector<float> p_prv_pos {0,0,0};
 vector<float> p_speed {0,0,0};
 vector<float> p_prv_force {0,0,0};
+vector<float> v_speed_x {0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f};
+vector<float> v_speed_y {0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,0.0f};
+float p_speed_x=0;
+float p_speed_y=0;
+
 float K = 0.25f;
 float K_spring = 0.75f;
 float epsilon = 0.00001f;
@@ -64,6 +68,9 @@ vector<float> Ai;
 vector<float> Bi;
 vector<float> fi;
 float A0;
+float vmin;
+float vmax;
+float scale = 1.0f;
 
 
 // Haptuator variable
@@ -104,10 +111,10 @@ public:
 		if (t <= 0.1f)
 		{
 			t += 0.00001f ;
-			acceleration = waveform(t);
+			acceleration = scale*waveform(t);
 			//						cout << acceleration << endl;
 
-			//	f_data << acceleration << endl;
+			f_data << acceleration << endl;
 			if (COMEDI_ERROR == m_daq->writeData(COMEDI_AN_OUT_SUB,COMEDI_MOTOR_OUT,COMEDI_RANGE,AREF_GROUND,acceleration))
 				printf("Error writing to DAQ board");
 		} else {
@@ -267,66 +274,84 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 	{
 		p_cur_pos[i] = posistion[i] - init_pos[i];
 		p_speed[i] = (p_cur_pos[i] - p_prv_pos[i])/0.001;
-	}
 
+	}
+	v_speed_x.push_back(p_speed[1]);
+	v_speed_x.erase(v_speed_x.begin());
+	p_speed_x = accumulate(v_speed_x.begin(),v_speed_x.end(),0.0f);
+	p_speed_x = p_speed_x/v_speed_x.size();
+
+	v_speed_y.push_back(p_speed[0]);
+	v_speed_y.erase(v_speed_y.begin());
+	p_speed_y = accumulate(v_speed_y.begin(),v_speed_y.end(),0.0f);
+	p_speed_y = p_speed_y/v_speed_y.size();
+	//cout << "Mean speed: " << p_speed_y<< endl;
 	//cout << "Pos: " << p_cur_pos[0] << "   " << p_cur_pos[1] << "   " << p_cur_pos[2] << endl;
 
-	if (p_cur_pos[1] > 0)
-		force[1] =  0;
-	else
-		force[1] = -K_spring*p_cur_pos[1];
+	if (TAP == MODE){
+		if (p_cur_pos[1] > 0)
+			force[1] =  0;
+		else
+			force[1] = -K_spring*p_cur_pos[1];
+
+	}
 
 	force[2] = -K * p_cur_pos[2];
 
-	force[0] = -K * p_cur_pos[0];;
+	//force[0] = -K * p_cur_pos[0];;
 
 	Saturation(force);
 	//cout << "Force: " << force[0] << "   " << force[1] << "   " << force[2] << endl;
 
-	if (RUN == MODE)
-		hdSetDoublev(HD_CURRENT_FORCE, force); // Only output force in running mode
+
+	//hdSetDoublev(HD_CURRENT_FORCE, force);
 
 	hdEndFrame(hdGetCurrentDevice());
 
-	if (RUN == MODE){ // RUNNING MODE
+	if (TAP == MODE){ // RUNNING MODE
 		if ((p_prv_force[1] <= epsilon) && (p_cur_pos[1] < p_prv_pos[1]) && (force[1] >= epsilon))
-			{
-				//	cout << "Control the haptuator " << endl;
-				//	cout << "Speed: " << p_speed[1] << endl;
+		{
+			cout << "Control the haptuator " << endl;
+			//				cout << "Speed: " << p_speed[1] << endl;
 
-				speed = p_speed[1];
-				if (speed >= VMAX)
-					speed = VMAX;
-				else if (speed <= VMIN)
-					speed = VMIN;
+			speed = p_speed_x;
+			if (speed >= vmax)
+				speed = vmax;
+			else if (speed <= vmin)
+				speed = vmin;
 
-				//		cout << "Speed: " << speed << endl;
+			cout << "Speed: " << speed << endl;
 
-				A0 = data_parser.speedInterpA0(speed);
-				Ai = data_parser.speedInterpA(speed);
-				Bi = data_parser.speedInterpB(speed);
+			A0 = data_parser.speedInterpA0(speed);
+			Ai = data_parser.speedInterpA(speed);
+			Bi = data_parser.speedInterpB(speed);
 
-				//		cout << "A0: " << endl;
-				//		cout << A0 << endl;
-				//
-				//		cout << "Ai: " << endl;
-				//		for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
-				//			cout << ' ' << *it;
-				//		cout << '\n';
-				//
-				//		cout << "Bi: " << endl;
-				//		for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
-				//			cout << ' ' << *it;
-				//		cout << '\n';
+					cout << "A0: " << endl;
+					cout << A0 << endl;
 
-				hap->setInterpolationData(A0,Ai,Bi,fi);
-				//		cout << "Playing the haptuator" << endl;
-				if (hap->isDataLoaded())
-					hap->start();
-			}
-	} else { // RECORDING MODE
+					cout << "Ai: " << endl;
+					for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
+						cout << ' ' << *it;
+					cout << '\n';
+
+					cout << "Bi: " << endl;
+					for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
+						cout << ' ' << *it;
+					cout << '\n';
+
+			hap->setInterpolationData(A0,Ai,Bi,fi);
+			//		cout << "Playing the haptuator" << endl;
+			if (hap->isDataLoaded())
+				hap->start();
+		}
+	} else if (DRAG == MODE){
+
+	} else if (RECORD_TAP == MODE){ // RECORDING MODE
 		f_acc = m_daq_acc->getAcc();
-		f_data << p_speed[1] << "  " << f_acc << endl;
+		f_data << p_speed_x << "  " << f_acc << endl;
+	} else if (RECORD_DRAG == MODE){
+		f_acc = m_daq_acc->getAcc();
+		f_data << p_speed_y << "  " << f_acc << endl;
 	}
 
 
@@ -337,9 +362,11 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
  */
 void keyPress(){
 	cout<<"Press <t> to start playing the haptuator (TESTING)."<<endl;
-	cout<<"Press <r> to start recording data."<<endl;
+	cout<<"Press <r> to start recording data in tapping mode."<<endl;
+	cout<<"Press <g> to start recording data in dragging mode."<<endl;
 	cout<<"Press <l> to load the data."<<endl;
-	cout<<"Press <s> to start phantom."<<endl;
+	cout<<"Press <s> to start phantom - TAP mode."<<endl;
+	cout<<"Press <d> to start phantom - DRAG mode."<<endl;
 	cout<<"Press <q> to exit the program."<<endl;
 	string filename;
 	std::stringstream ss;
@@ -365,6 +392,9 @@ void keyPress(){
 			cout << "Loading drive data" << endl;
 			if(data_parser.loadData(filename))
 			{
+				fi = data_parser.getFreq();
+				vmin = data_parser.getMinVel();
+				vmax = data_parser.getMaxVel();
 				cout << "Drive Data loaded! \n";
 			}
 
@@ -373,17 +403,21 @@ void keyPress(){
 		case 't':
 			cout << "Put input speed: " << endl;
 			cin >> speed;
+			if (f_data.is_open())
+				f_data.close();
+
+			f_data.open("data.txt",std::fstream::out);
 			// TESTING
 			//
-			if (speed >= VMAX)
-				speed = VMAX;
-			else if (speed <= VMIN)
-				speed = VMIN;
+			if (speed >= vmax)
+				speed = vmax;
+			else if (speed <= vmin)
+				speed = vmin;
 
 			A0 = data_parser.speedInterpA0(speed);
 			Ai = data_parser.speedInterpA(speed);
 			Bi = data_parser.speedInterpB(speed);
-
+			//fi = data_parser.getFreq();
 			cout << "A0: " << endl;
 			cout << A0 << endl;
 
@@ -409,7 +443,7 @@ void keyPress(){
 			break;
 		case 'r':
 			cout << "Start recording data" << endl;
-			MODE = RECORD; // Recording mode
+			MODE = RECORD_TAP; // Recording mode
 			if (f_data.is_open())
 				f_data.close();
 			filename = "Test_Acc_N";
@@ -421,9 +455,27 @@ void keyPress(){
 			cout << "Writing data to " << filename << endl;
 			phantomRun();
 			break;
+		case 'g':
+			cout << "Start recording data" << endl;
+			MODE = RECORD_DRAG; // Recording mode
+			if (f_data.is_open())
+				f_data.close();
+			filename = "Test_Acc_N";
+			ss.str("");
+			ss << i_record_count++;
+			filename.append(ss.str());
+			filename.append(".txt");
+			f_data.open(filename.c_str(),std::fstream::out);
+			cout << "Writidng data to " << filename << endl;
+			phantomRun();
+			break;
 		case 's':
 			cout << "Start running phantom device" << endl;
-			MODE = RUN; // Running mode
+			MODE = TAP; // Running mode
+			if (f_data.is_open())
+				f_data.close();
+
+			f_data.open("data.txt",std::fstream::out);
 			phantomRun();
 			break;
 		case 'q':
@@ -499,9 +551,9 @@ int main(int argc, char *argv[]) {
 	bias_voltage = m_daq_acc->getBiasVol();
 	printf("Bias voltage: %f\n", bias_voltage);
 	/* Rendering frequency*/
-	for (int i = 14;i<=29;i++){
-		fi.push_back(i*5);
-	}
+	//	for (int i = 14;i<=29;i++){
+	//		fi.push_back(i*5);
+	//	}
 
 
 	/*

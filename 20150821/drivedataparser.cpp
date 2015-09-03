@@ -131,6 +131,7 @@ float DriveDataParser::interp1d(float val, vector<float> in,vector<float> out) {
 		for (int i = 0;i<in.size();i++)
 		{
 			x[i] = in[i];
+
 			y[i] = out[i];
 		}
 		gsl_spline_init(_gsl_spline, x, y, in.size());
