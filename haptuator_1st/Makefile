@@ -5,7 +5,7 @@ LDFLAGS = -lm -lcomedi -lboost_system -lboost_thread  -lHD -lHDU -lncurses  -lgs
 all: haptuator.o drivedataparser.o daqdevice.o daqacc.o
 	${CC}   haptuator.o drivedataparser.o daqdevice.o daqacc.o ${LDFLAGS} -o haptuator
 
-drivedatadarser.o: drivedatadarser.cpp drivedataparser.h cspline.h
+drivedataparser.o: drivedataparser.cpp drivedataparser.h
 	${CC} -c ${CPPFLAGS} ${LDFLAGS} drivedataparser.cpp
 
 daqdevice.o: daqdevice.cpp daqdevice.h 
