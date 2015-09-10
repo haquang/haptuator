@@ -8,10 +8,10 @@ nfft = 2^nextpow2(M);
 
 %% read data from file
 run('acc.m');
-acc_x = data(40310:nfft+40310,1);
-acc_y = data(40310:nfft+40310,2);
-acc_z = data(40310:nfft+40310,3);
-acc_sim = data(40310:nfft+40310,4);
+acc_x = data(53575:nfft+53575,1);
+acc_y = data(53575:nfft+53575,2);
+acc_z = data(53575:nfft+53575,3);
+acc_sim = data(53575:nfft+53575,4);
 %% Fourier transform
 f = Fs/2*linspace(0,1,nfft/2);
 acc_x_fft= fft(acc_x,nfft);
@@ -45,7 +45,7 @@ acc_new = real(ifft(acc_new_fft_filter,nfft));
 %% Plot
 plot(acc_sim,'r-');
 hold on;
-plot(-acc_new,'b');
+plot(acc_new,'b');
 % hold on;
 % plot(acc_x,'k');
 % hold on;

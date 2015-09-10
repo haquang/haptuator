@@ -1,6 +1,6 @@
 close all;
 clear;
-N = 61;
+N = 10;
 Fs=1000;
 M=200;
 nfft = 2^nextpow2(M);

@@ -13,23 +13,40 @@
 #include <boost/thread.hpp>
 #include <numeric>
 #include <queue>
+#include <rtai_posix.h>
+#include <rtai_lxrt.h>
+
 #include "daqdevice.h"
 #include "daqacc.h"
 #include "haptuator.h"
 #include "drivedataparser.h"
 
 using namespace std;
+
+/*
+ * RTAI
+ */
+
+static int haptuator_thread;
+static RT_TASK *rt_task;
+static RTIME period_ns = TIMER_HAPTUATOR;
+
+
+RTIME haptuator_period; /* requested timer period, in counts */
+
+int count = 0;
+
 enum MODE {SINEWAVE,CUSTOM};
 MODE mode;
 /* Global variable*/
 fstream f_data;
-DaqAcc* m_daq_acc_x;
-DaqAcc* m_daq_acc_y;
-DaqAcc* m_daq_acc_z;
+DaqAcc* m_daq_acc;
 Haptuator* haptuator;
 DriveDataParser data_parser;
-
-
+boost::asio::io_service t_cali_service;
+/*
+ * Interpolation
+ */
 vector<float> Ai;
 vector<float> Bi;
 vector<float> fi;
@@ -38,94 +55,145 @@ float vmin;
 float vmax;
 
 /*
- *  This class manage the thread for recording
+ * Swept frequency
  */
-class RecordThread{
-public:
-	RecordThread(DaqAcc* daq_x,DaqAcc* daq_y,DaqAcc* daq_z){
-		_daq_x = daq_x;
-		_daq_y = daq_y;
-		_daq_z = daq_z;
-		_timer  = new boost::asio::deadline_timer(t_read_service, boost::posix_time::microseconds(TIMER_RECORD));
-	}
-	void start(){
-		m_thread = new boost::thread(boost::bind(static_cast<size_t (boost::asio::io_service::*)()>(&boost::asio::io_service::run), &t_read_service));
-		_timer->async_wait(boost::bind(&RecordThread::run,this));
-	}
+float freq; // Hz
+float f_start = 10;
+float f_end = 500;
+float t = 0.0f;
+float* acc;
+float T = 5; //second;
+#define MAG 1.0
+/*
+ * Memory
+ */
+struct data{
+	float acc_x;
+	float acc_y;
+	float acc_z;
+	float acc;
 
-	void run(){
-		//cout << "Record thread" << endl;
-		f_data << m_daq_acc_x->getAcc() << " "<< m_daq_acc_y->getAcc() << " "<< m_daq_acc_z->getAcc() << " " << haptuator->getAccRender() << endl;
-		boost::this_thread::sleep( boost::posix_time::microseconds(TIME_SLEEP));
-		_timer->async_wait(boost::bind(&RecordThread::run,this));
-		return;
+	data(float x,float y,float z,float acc_in){
+		acc_x = x;
+		acc_y = y;
+		acc_z = z;
+		acc  = acc_in;
 	}
-
-private:
-	boost::thread* m_thread;
-	boost::asio::io_service t_read_service;
-	boost::asio::deadline_timer* _timer;
-	DaqAcc* _daq_x;
-	DaqAcc* _daq_y;
-	DaqAcc* _daq_z;
 };
-RecordThread* record_thread;
+
+vector<data>* v_mem;
+vector<float>* v_time;
+float* bias_voltage;
+//class HaptuatorThread {
+//public:
+//	HaptuatorThread(Haptuator* daq){
+//		hap = daq;
+//		t = 0.0f;
+//		_timer  = new boost::asio::deadline_timer(t_haptuator_service, boost::posix_time::microseconds(TIMER_HAPTUATOR));
+//	}
+//	void start(){
+//		t = 0.0f;
+//		m_thread = new boost::thread(boost::bind(static_cast<size_t (boost::asio::io_service::*)()>(&boost::asio::io_service::run), &t_haptuator_service));
+//		_timer->async_wait(boost::bind(&HaptuatorThread::run,this));
+//	}
+//
+//	void run(){
+//		//cout << "Haptuator thread" << endl;
+//		if (SINEWAVE == mode){
+//			t += (float) TIMER_HAPTUATOR / 1000000;
+//			if (t <= T){
+//				// update frequency
+//				freq = f_start*exp((log10(f_end)-log10(f_start))*t/T);
+//				if (COMEDI_ERROR == hap->renderVibration(t,freq,MAG))
+//					cout << "Error writing to DAQ board" << endl;
+//				acc = m_daq_acc->getAcc();
+//				f_data << acc[0] << " "<< acc[1] << " "<< acc[2] << " " << haptuator->getAccRender() << " " << freq << endl;
+//			}
+//
+//		} else if (CUSTOM == mode) {
+//			t += (float) TIMER_HAPTUATOR / 1000000;
+//			if (t <= 0.1f){
+//				if (COMEDI_ERROR == hap->renderVibration(t))
+//					cout << "Error writing to DAQ board" << endl;
+//
+//			} else {
+//				boost::this_thread::sleep( boost::posix_time::milliseconds(100));
+//			}
+//		}
+//
+//		_timer->async_wait(boost::bind(&HaptuatorThread::run,this));
+//
+//
+//		return;
+//
+//	}
+//
+//private:
+//	boost::thread* m_thread;
+//	boost::asio::io_service t_haptuator_service;
+//	boost::asio::deadline_timer* _timer;
+//	float t;;
+//	Haptuator* hap;
+//
+//};
+//HaptuatorThread* haptuator_thread;
+Haptuator* hap;
 
 /*
- * This class manage the haptuator control class
+ * RTAI task for haptuator
  */
+void haptuator_control(void *arg)
+{
+	int retval;
 
-#define FREQ 100  // Testing frequency
-#define MAG 1.0f
-class HaptuatorThread {
-public:
-	HaptuatorThread(Haptuator* daq){
-		hap = daq;
-		t = 0.0f;
-		_timer  = new boost::asio::deadline_timer(t_haptuator_service, boost::posix_time::microseconds(TIMER_HAPTUATOR));
-	}
-	void start(){
-		t = 0.0f;
-		m_thread = new boost::thread(boost::bind(static_cast<size_t (boost::asio::io_service::*)()>(&boost::asio::io_service::run), &t_haptuator_service));
-		_timer->async_wait(boost::bind(&HaptuatorThread::run,this));
-	}
+	/*  make this thread LXRT soft realtime */
+	rt_task = rt_task_init_schmod(nam2num("Haptuator"), 2, 0, 0, SCHED_FIFO, 0xF);
+	mlockall(MCL_CURRENT | MCL_FUTURE);
 
-	void run(){
-		//cout << "Haptuator thread" << endl;
+	// makes task hard real time (default: soft)
+	// uncomment the next line when developing : develop in soft real time mode
+	rt_make_hard_real_time();
+
+	/* make task periodic, starting one cycle from now */
+	retval = rt_task_make_periodic(rt_task,
+			rt_get_time() + haptuator_period, haptuator_period);
+	if (0 != retval) {
+		if (-EINVAL == retval) {
+			/* task structure is already in use */
+			rt_printk("periodic task: task structure is invalid\n");
+		} else {
+			/* unknown error */
+			rt_printk("periodic task: error starting task\n");
+		}
+		return;
+	}
+	while (1) {
+		t += (float) TIMER_HAPTUATOR / 1000000000;
 		if (SINEWAVE == mode){
-			t += (float) TIMER_HAPTUATOR / 1000000;
-
-			if (COMEDI_ERROR == hap->renderVibration(t,FREQ,MAG))
-				cout << "Error writing to DAQ board" << endl;
-
-
-		} else if (CUSTOM == mode) {
-			t += (float) TIMER_HAPTUATOR / 1000000;
-			if (t <= 0.1f){
-				if (COMEDI_ERROR == hap->renderVibration(t))
-					cout << "Error writing to DAQ board" << endl;
-
-			} else {
-				boost::this_thread::sleep( boost::posix_time::milliseconds(100));
+			if (t < T){
+				freq = f_start*exp((log(f_end)-log(f_start))*t/T);
+				//				v_time->push_back(t);
+				haptuator->renderVibration(t,freq,MAG);
+				acc = m_daq_acc->getAcc();
+				v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender()));
 			}
 		}
-		_timer->async_wait(boost::bind(&HaptuatorThread::run,this));
-
-
-		return;
-
+		rt_task_wait_period();
 	}
 
-private:
-	boost::thread* m_thread;
-	boost::asio::io_service t_haptuator_service;
-	boost::asio::deadline_timer* _timer;
-	float t;;
-	Haptuator* hap;
+	/* we'll never get here */
+	return;
+}
 
-};
-HaptuatorThread* haptuator_thread;
-
+void reset(){
+	// reset time
+	t = 0.0f;
+	// reset acceleration data
+	v_mem->clear();
+}
+/*
+ * Calibration function for accelerator
+ */
 /*
  * Calibration function for accelerator
  */
@@ -133,21 +201,35 @@ void calibration(const boost::system::error_code& err,boost::asio::deadline_time
 {
 	if (err)
 		return;
-	if (!m_daq_acc_x->getCalibrationMode() && !m_daq_acc_y->getCalibrationMode() && !m_daq_acc_z->getCalibrationMode()){
+	if (!m_daq_acc->getCalibrationMode()){
 		printf("Finished calibration\n");
 	} else {
-		m_daq_acc_x->calibration();
-		m_daq_acc_y->calibration();
-		m_daq_acc_z->calibration();
-
+		m_daq_acc->calibration();
 		t->async_wait(boost::bind(calibration,boost::asio::placeholders::error,t));
 	}
 }
 
+/*
+ * Flush data to file
+ */
+void flushToFile(string filename){
+	if (f_data.is_open())
+		f_data.close();
+
+	f_data.open(filename.c_str(),std::fstream::out);
+	f_data << "data = [";
+	for (vector<data>::iterator it = v_mem->begin();it<v_mem->end();++it){
+		f_data << (*it).acc_x << " " << (*it).acc_y << " " << (*it).acc_z << " " << (*it).acc << "\n";
+	}
+	f_data << "];";
+	f_data.close();
+}
+
+
 void keyPress(){
-	cout<<"Press <r> to start recording acceleration data"<<endl;
 	cout<<"Press <s> to start playing haptuator with sinewave."<<endl;
-	cout<<"Press <c> to start haptuator with custom signal."<<endl;
+	cout<<"Press <t> to start haptuator with custom signal."<<endl;
+	cout<<"Press <r> to save acceleration data."<<endl;
 	cout<<"Press <l> to load the data." << endl;
 	cout<<"Press <q> to exit the program."<<endl;
 	string filename;
@@ -159,7 +241,6 @@ void keyPress(){
 		cin >> lastKey;
 		switch ( lastKey ) {
 		case 'l':
-
 			cout << "Load default data ? Y/N " << endl;
 			cin >> c;
 			if (c == 'Y' || c == 'y'){
@@ -171,7 +252,6 @@ void keyPress(){
 				cout << "Filename: " << endl;
 				cin >> filename;
 			}
-
 			cout << "Loading drive data" << endl;
 			if(data_parser.loadData(filename))
 			{
@@ -183,21 +263,19 @@ void keyPress(){
 
 			break;
 
-		case 'r':
-			cout << "Start recording acceleration" << endl;
-			if (f_data.is_open())
-				f_data.close();
-
-			f_data.open("acc.m",std::fstream::out);
-			f_data << "data = [";
-			record_thread->start();
-			break;
 		case 's':
-			cout << "Start playing haptuator" << endl;
+			cout << "Start haptuator:" << endl;
 			mode = SINEWAVE;
-			haptuator_thread->start();
+			reset();
+			start_rt_timer(haptuator_period);
 			break;
-		case 'c':
+		case 'r':
+			filename = "acc.m";
+			flushToFile(filename);
+			cout << "Done recording!" << endl;
+			break;
+
+		case 't':
 			cout << "Start playing haptuator" << endl;
 			mode = CUSTOM;
 			cout << "Put input speed: " << endl;
@@ -211,27 +289,13 @@ void keyPress(){
 			A0 = data_parser.speedInterpA0(speed);
 			Ai = data_parser.speedInterpA(speed);
 			Bi = data_parser.speedInterpB(speed);
-			//fi = data_parser.getFreq();
-			cout << "A0: " << endl;
-			cout << A0 << endl;
-
-			cout << "Ai: " << endl;
-			for (vector<float>::iterator it = Ai.begin() ; it != Ai.end(); ++it)
-				cout << ' ' << *it;
-			cout << '\n';
-
-			cout << "Bi: " << endl;
-			for (vector<float>::iterator it = Bi.begin() ; it != Bi.end(); ++it)
-				cout << ' ' << *it;
-			cout << '\n';
-
 			haptuator->setInterpolationParameter(A0,Ai,Bi,fi);
-			haptuator_thread->start();
+			//			haptuator_thread->start();
 			break;
+
 		case 'q':
 			cout << "Exiting..." << endl;
 			boost::this_thread::interruption_point();
-			f_data << "];";
 			exit(0);
 			break;
 		default:
@@ -246,8 +310,21 @@ void keyPress(){
  */
 
 int main(int argc, char *argv[]) {
-	float bias_voltage;
+	bias_voltage = new float(ACC_SIZE);
 	cout << "Starting....." << endl;
+
+	/*
+	 * RTAI
+	 */
+	RT_TASK *task;
+	task = rt_task_init_schmod(nam2num("PERIOD_TASK"), 0, 0, 0, SCHED_FIFO, 0xF);
+	mlockall(MCL_CURRENT | MCL_FUTURE);
+
+	// set realtime timer to run in pure periodic mode
+	rt_set_periodic_mode();
+	// start realtime timer and scheduler
+	haptuator_period = nano2count(period_ns);
+	haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000);
 
 	/* DAQ device*/
 	comedi_t *device;
@@ -267,44 +344,47 @@ int main(int argc, char *argv[]) {
 	{
 		printf("Error calibrating DAQ board - Analog output\n");
 	}
-	haptuator_thread = new HaptuatorThread(haptuator);
+	//	haptuator_thread = new HaptuatorThread(haptuator);
 
 	/*
 	 * Calibrating Accelerator
 	 */
-	m_daq_acc_x = new DaqAcc(device,COMEDI_AN_IN_SUB,COMEDI_ADC_IN_0,COMEDI_RANGE);
-	m_daq_acc_y = new DaqAcc(device,COMEDI_AN_IN_SUB,COMEDI_ADC_IN_1,COMEDI_RANGE);
-	m_daq_acc_z = new DaqAcc(device,COMEDI_AN_IN_SUB,COMEDI_ADC_IN_2,COMEDI_RANGE);
-	if ((COMEDI_ERROR == m_daq_acc_x->DAQcalibration(COMEDI_AN_IN_SUB,COMEDI_ADC_IN_0,COMEDI_RANGE)) || (COMEDI_ERROR == m_daq_acc_x->DAQcalibration(COMEDI_AN_IN_SUB,ACC_POWER_SUPPLY_PORT,COMEDI_RANGE))
-			|| (COMEDI_ERROR == m_daq_acc_y->DAQcalibration(COMEDI_AN_IN_SUB,COMEDI_ADC_IN_1,COMEDI_RANGE)) || (COMEDI_ERROR == m_daq_acc_y->DAQcalibration(COMEDI_AN_IN_SUB,ACC_POWER_SUPPLY_PORT,COMEDI_RANGE))
-			|| (COMEDI_ERROR == m_daq_acc_z->DAQcalibration(COMEDI_AN_IN_SUB,COMEDI_ADC_IN_2,COMEDI_RANGE)) || (COMEDI_ERROR == m_daq_acc_z->DAQcalibration(COMEDI_AN_IN_SUB,ACC_POWER_SUPPLY_PORT,COMEDI_RANGE)))
+	int* chanel_list = new int(ACC_SIZE);
+	chanel_list[0] = COMEDI_ADC_IN_0;
+	chanel_list[1] = COMEDI_ADC_IN_1;
+	chanel_list[2] = COMEDI_ADC_IN_2;
+
+	m_daq_acc = new DaqAcc(device,COMEDI_AN_IN_SUB,chanel_list,ACC_POWER_SUPPLY_PORT,COMEDI_RANGE);
+
+	if (COMEDI_ERROR == m_daq_acc->DaqCalibration())
 	{
 		printf("Error calibrating DAQ board\n");
 	}
-	if (COMEDI_ERROR == m_daq_acc_x->readSupplyVoltage(ACC_POWER_SUPPLY_PORT) || COMEDI_ERROR == m_daq_acc_y->readSupplyVoltage(ACC_POWER_SUPPLY_PORT) || COMEDI_ERROR == m_daq_acc_z->readSupplyVoltage(ACC_POWER_SUPPLY_PORT)){
+	if (COMEDI_ERROR == m_daq_acc->readSupplyVoltage()){
 		printf("Error reading power supply voltage for Acc calibration\n");
 	} else {
-		printf("Input voltage: %f - %f - %f\n", m_daq_acc_x->getSupplyVoltage(),m_daq_acc_y->getSupplyVoltage(),m_daq_acc_z->getSupplyVoltage());
+		printf("Input voltage: %f\n", m_daq_acc->getSupplyVoltage());
 	}
+
+	cout << "Calibrating accelerometer" << endl;
+	m_daq_acc->setCalibrationMode();
+
 	/*Timer for calibration*/
-	boost::asio::io_service t_cali_service;
+
 	boost::asio::deadline_timer timer_cali(t_cali_service, boost::posix_time::microseconds(1000));
 	timer_cali.async_wait(boost::bind(calibration,boost::asio::placeholders::error, &timer_cali));
 
-	m_daq_acc_x->setCalibrationMode();
-	m_daq_acc_y->setCalibrationMode();
-	m_daq_acc_z->setCalibrationMode();
+	m_daq_acc->setCalibrationMode();
 	t_cali_service.run();
-	while (m_daq_acc_x->getCalibrationMode() || m_daq_acc_y->getCalibrationMode() || m_daq_acc_z->getCalibrationMode()){}
+	while (m_daq_acc->getCalibrationMode()){}
 
-	bias_voltage = m_daq_acc_x->getBiasVol();
-	printf("Bias voltage X: %f\n", bias_voltage);
-	bias_voltage = m_daq_acc_y->getBiasVol();
-	printf("Bias voltage Y: %f\n", bias_voltage);
-	bias_voltage = m_daq_acc_z->getBiasVol();
-	printf("Bias voltage Z: %f\n", bias_voltage);
+	bias_voltage = m_daq_acc->getBiasVol();
+	printf("Bias voltage X: %f\n", bias_voltage[0]);
+	printf("Bias voltage Y: %f\n", bias_voltage[1]);
+	printf("Bias voltage Z: %f\n", bias_voltage[2]);
 
-	record_thread = new RecordThread(m_daq_acc_x,m_daq_acc_y,m_daq_acc_z);
+	v_mem = new vector<data>;
+	v_time = new vector<float>;
 
 	/* Thread for key press*/
 	boost::thread key_thread(&keyPress);

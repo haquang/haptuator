@@ -1,6 +1,6 @@
 CC = g++
-CPPFLAGS = -Wall -g -std=gnu++11 -w
-LDFLAGS = -lm -lcomedi -lboost_system -lboost_thread  -lHD -lHDU -lncurses  -lgsl -lgslcblas -lm
+CPPFLAGS = -Wall -g -std=gnu++11 -w -I/usr/realtime/include -O2 -fpermissive
+LDFLAGS = -lm -lcomedi -lboost_system -lboost_thread  -lHD -lHDU -lncurses  -lgsl -lgslcblas -pthread
 
 all: main.o daqdevice.o daqacc.o haptuator.o drivedataparser.o
 	${CC}   main.o daqdevice.o daqacc.o haptuator.o drivedataparser.o ${LDFLAGS} -o haptuator

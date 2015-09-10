@@ -162,9 +162,11 @@ HDCallbackCode HDCALLBACK phantom_callback(void *pUserData)
 		} else if (touch && phantom.getForceZ() < epsilon){
 			touch = false;
 		}
+		// record data
+		f_data << m_daq_acc_x->getAcc() << " "<< m_daq_acc_y->getAcc() << " "<< m_daq_acc_z->getAcc() << " " << haptuator->getAccRender()<< endl;
+
 	} else if (RECORD == mode){ // RECORDING MODE
-		acc = m_daq_acc->getAcc();
-		f_data << phantom.getSpeedZ() << "  " << acc << endl;
+		f_data << phantom.getSpeedZ() << " "<< m_daq_acc_x->getAcc() << " "<< m_daq_acc_y->getAcc() << " "<< m_daq_acc_z->getAcc() << endl;
 	}
 
 
@@ -265,7 +267,8 @@ void keyPress(){
 			if (f_data.is_open())
 				f_data.close();
 
-			f_data.open("data.txt",std::fstream::out);
+			f_data.open("acc.m",std::fstream::out);
+			f_data << "data = [";
 			mode = TAP;
 			phantom.Run();
 			break;
@@ -273,6 +276,7 @@ void keyPress(){
 			cout << "Exiting..." << endl;
 			boost::this_thread::interruption_point();
 			phantom.Close();
+			f_data << "];";
 			exit(0);
 			break;
 		default:

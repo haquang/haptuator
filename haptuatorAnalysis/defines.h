@@ -26,11 +26,17 @@
 #define TIMER_SCHEDULE 1000
 #define TIME_SLEEP 5
 #define TIMER_RECORD 1000
+#define ACC_SIZE 3
+
 
 // SPEED 
 
 #define MAX_SPEED 100  // RPS 
 #define MAX_SPEED_VOL 4 // 4 V --> Input range (-4,4)
 
-#define TIMER_HAPTUATOR 10
+#define TIMER_HAPTUATOR 100000 // ns
+#define TIMER_CALI 1000000 // ns
 #define TIMER_UPDATE_FREQ 5000000
+
+
+#define GRAVITY 9.81

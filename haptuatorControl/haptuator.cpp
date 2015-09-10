@@ -40,7 +40,7 @@ float Haptuator::customSignal(float t) {
 
 }
 
-float Haptuator::setInterpolationParameter(float A0, vector<float> Ai,vector<float> Bi, vector<float> fi) {
+void Haptuator::setInterpolationParameter(float A0, vector<float> Ai,vector<float> Bi, vector<float> fi) {
 	_A0 = A0;
 	_Ai = Ai;
 	_Bi = Bi;

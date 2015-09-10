@@ -1,0 +1,11 @@
+#!/bin/sh
+MODULES=$prefix/modules
+
+echo "*** EXECTIME (user) ***"
+echo "Now start the realtime process <enter>,"
+read junk
+$SUDO ./haptuator
+echo
+echo "Done. Press <enter> to remove the modules."
+read junk
+
