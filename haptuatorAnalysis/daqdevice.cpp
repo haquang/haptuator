@@ -111,43 +111,43 @@ int DaqDevice::writeData(int subdev,int channel, int range_idx,int aref,double v
 
 int DaqDevice::setupCounter(int subdev,int channel,int initial_count)
 {
-	int retval;
-	lsampl_t counter_mode;
-
-	retval = comedi_reset(_dev, subdev);
-	if(retval < 0) return COMEDI_ERROR;
-
-	retval = comedi_set_gate_source(_dev, subdev, 0, 0, NI_GPCT_GATE_PIN_GATE_SELECT(0) /* NI_GPCT_GATE_PIN_i_GATE_SELECT *//*| CR_EDGE*/);
-	if(retval < 0) return COMEDI_ERROR;
-	retval = comedi_set_gate_source(_dev, subdev, 0, 1, NI_GPCT_DISABLED_GATE_SELECT | CR_EDGE);
-	if(retval < 0)
-	{
-		fprintf(stderr, "Failed to set second gate source.  This is expected for older boards (e-series, etc.)\n"
-			"that don't have a second gate.\n");
-	}
-
-	counter_mode = NI_GPCT_COUNTING_MODE_NORMAL_BITS;
-	// output pulse on terminal count (doesn't really matter for this application)
-	counter_mode |= NI_GPCT_OUTPUT_TC_PULSE_BITS;
-	/* Don't alternate the reload source between the load a and load b registers.
-		Doesn't really matter here, since we aren't going to be reloading the counter.
-	*/
-	counter_mode |= NI_GPCT_RELOAD_SOURCE_FIXED_BITS;
-	// count up
-	counter_mode |= NI_GPCT_COUNTING_DIRECTION_UP_BITS;
-	// don't stop on terminal count
-	counter_mode |= NI_GPCT_STOP_ON_GATE_BITS;
-	// don't disarm on terminal count or gate signal
-	counter_mode |= NI_GPCT_NO_HARDWARE_DISARM_BITS;
-	retval = comedi_set_counter_mode(_dev, subdev, channel, counter_mode);
-	if(retval < 0) return COMEDI_ERROR;
-
-	/* set initial counter value by writing to channel 0.  The "load a" and "load b" registers can be
-	set by writing to channels 1 and 2 respectively. */
-	retval = comedi_data_write(_dev, subdev, channel, 0, 0, initial_count);
-
-	retval = comedi_arm(_dev, subdev, NI_GPCT_ARM_IMMEDIATE);
-	if(retval < 0) return COMEDI_ERROR;
+//	int retval;
+//	lsampl_t counter_mode;
+//
+//	retval = comedi_reset(_dev, subdev);
+//	if(retval < 0) return COMEDI_ERROR;
+//
+//	retval = comedi_set_gate_source(_dev, subdev, 0, 0, NI_GPCT_GATE_PIN_GATE_SELECT(0) /* NI_GPCT_GATE_PIN_i_GATE_SELECT *//*| CR_EDGE*/);
+//	if(retval < 0) return COMEDI_ERROR;
+//	retval = comedi_set_gate_source(_dev, subdev, 0, 1, NI_GPCT_DISABLED_GATE_SELECT | CR_EDGE);
+//	if(retval < 0)
+//	{
+//		fprintf(stderr, "Failed to set second gate source.  This is expected for older boards (e-series, etc.)\n"
+//			"that don't have a second gate.\n");
+//	}
+//
+//	counter_mode = NI_GPCT_COUNTING_MODE_NORMAL_BITS;
+//	// output pulse on terminal count (doesn't really matter for this application)
+//	counter_mode |= NI_GPCT_OUTPUT_TC_PULSE_BITS;
+//	/* Don't alternate the reload source between the load a and load b registers.
+//		Doesn't really matter here, since we aren't going to be reloading the counter.
+//	*/
+//	counter_mode |= NI_GPCT_RELOAD_SOURCE_FIXED_BITS;
+//	// count up
+//	counter_mode |= NI_GPCT_COUNTING_DIRECTION_UP_BITS;
+//	// don't stop on terminal count
+//	counter_mode |= NI_GPCT_STOP_ON_GATE_BITS;
+//	// don't disarm on terminal count or gate signal
+//	counter_mode |= NI_GPCT_NO_HARDWARE_DISARM_BITS;
+//	retval = comedi_set_counter_mode(_dev, subdev, channel, counter_mode);
+//	if(retval < 0) return COMEDI_ERROR;
+//
+//	/* set initial counter value by writing to channel 0.  The "load a" and "load b" registers can be
+//	set by writing to channels 1 and 2 respectively. */
+//	retval = comedi_data_write(_dev, subdev, channel, 0, 0, initial_count);
+//
+//	retval = comedi_arm(_dev, subdev, NI_GPCT_ARM_IMMEDIATE);
+//	if(retval < 0) return COMEDI_ERROR;
 
 	return COMEDI_OK;
 }

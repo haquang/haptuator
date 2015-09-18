@@ -22,17 +22,20 @@
 #include "drivedataparser.h"
 
 using namespace std;
+
 /*
  * RTAI
  */
 
-pthread_t haptuator_thread;
-//static RT_TASK *rt_task;
-RT_TASK *maintask;
+static int haptuator_thread;
+static RT_TASK *rt_task;
 static RTIME period_ns = TIMER_HAPTUATOR;
+RTIME t_start,t_end;
+
 RTIME haptuator_period; /* requested timer period, in counts */
-bool stop;
-int exectime;
+
+int count = 0;
+
 enum MODE {SINEWAVE,CUSTOM};
 MODE mode;
 /* Global variable*/
@@ -54,13 +57,13 @@ float vmax;
 /*
  * Swept frequency
  */
-float freq = 50; // Hz
-float f_start = 50;
-float f_end = 500;
+float freq; // Hz
+float f_start = 10;
+float f_end = 1000;
 float t = 0.0f;
 float* acc;
 float T = 3; //second;
-#define MAG 1
+#define MAG 1.0
 /*
  * Memory
  */
@@ -69,19 +72,19 @@ struct data{
 	float acc_y;
 	float acc_z;
 	float acc;
-	float _freq;
+	float freq_;
 
 	data(float x,float y,float z,float acc_in,float freq){
 		acc_x = x;
 		acc_y = y;
 		acc_z = z;
 		acc  = acc_in;
-		_freq = freq;
+		freq_ = freq;
 	}
 };
 
 vector<data>* v_mem;
-vector<int>* v_time;
+vector<float>* v_time;
 float* bias_voltage;
 
 Haptuator* hap;
@@ -89,21 +92,18 @@ Haptuator* hap;
 /*
  * RTAI task for haptuator
  */
-void *haptuator_control(void *arg)
+void haptuator_control(void *arg)
 {
 	int retval;
-	RT_TASK *rt_task;
-	RTIME exec_start, exec_end;
+
 	/*  make this thread LXRT soft realtime */
-	rt_task = rt_task_init_schmod(nam2num("Haptuator"), 1, 0, 0, SCHED_FIFO, 0xF);
-	printf("THREAD INIT:name = %lu, address = %p.\n", rt_task, "Haptuator");
+	rt_task = rt_task_init_schmod(nam2num("Haptuator"), 2, 0, 0, SCHED_FIFO, 0xF);
 	mlockall(MCL_CURRENT | MCL_FUTURE);
 
 	// makes task hard real time (default: soft)
 	// uncomment the next line when developing : develop in soft real time mode
 	rt_make_hard_real_time();
 
-	haptuator_period = nano2count(period_ns);
 	/* make task periodic, starting one cycle from now */
 	retval = rt_task_make_periodic(rt_task,
 			rt_get_time() + haptuator_period, haptuator_period);
@@ -115,57 +115,35 @@ void *haptuator_control(void *arg)
 			/* unknown error */
 			rt_printk("periodic task: error starting task\n");
 		}
-		return 0;
+		return;
 	}
-	exectime = 0.0f;
-	exec_start = rt_get_cpu_time_ns();
+	while (1) {
+		t_start = rt_get_cpu_time_ns();
 
-	while(!stop) {
-		t += (float) TIMER_HAPTUATOR / 1000000000;
-		if (t < T){
-			freq = f_start*exp((log(f_end)-log(f_start))*t/T);
-			//				v_time->push_back(t);
-			haptuator->renderVibration(t,freq,MAG);
-			acc = m_daq_acc->getAcc();
-			v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender(),freq));
-		} else {
-			stop = true;
+		t += (float) 0.0001;
+		if (SINEWAVE == mode){
+			if (t < T){
+				freq = f_start*exp((log(f_end)-log(f_start))*t/T);
+				//v_time->push_back(t);
+				haptuator->renderVibration(t,freq,MAG);
+				acc = m_daq_acc->getAcc();
+				v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender(),freq));
+			}
 		}
+		t_end = rt_get_cpu_time_ns();
+		v_time->push_back(nano2count(t_end - t_start));
 		rt_task_wait_period();
-//		exec_end = rt_get_cpu_time_ns();
-//		v_time->push_back(exec_end - exec_start);
-		//		if (exectime <= abs(exec_end - exec_start)) {
-		//			exectime = abs(exec_end - exec_start);
-		//		}
-//		exec_start = exec_end;
-
 	}
-	rt_make_soft_real_time();
-	rt_task_delete(rt_task);
 
-//	for (vector<int>::iterator it = v_time->begin();it<v_time->end();++it){
-//		printf("Exec time: %d\n",*it);
-//	}
-	//	printf("THREAD: time = %d\n", exectime);
-	printf("THREAD %lu ENDS\n", rt_task);
-
-	return 0;
+	/* we'll never get here */
+	return;
 }
 
 void reset(){
-	stop = false;
 	// reset time
 	t = 0.0f;
 	// reset acceleration data
 	v_mem->clear();
-	v_time->clear();
-
-	// reintialize thread
-
-	if (!(haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000))){
-		printf("ERROR IN CREATING THREAD\n");
-		exit(1);
-	}
 }
 /*
  * Calibration function for accelerator
@@ -195,10 +173,14 @@ void flushToFile(string filename){
 	f_data.open(filename.c_str(),std::fstream::out);
 	f_data << "data = [";
 	for (vector<data>::iterator it = v_mem->begin();it<v_mem->end();++it){
-		f_data << (*it).acc_x << " " << (*it).acc_y << " " << (*it).acc_z << " " << (*it).acc << " " << (*it)._freq <<"\n";
+		f_data << (*it).acc_x << " " << (*it).acc_y << " " << (*it).acc_z << " " << (*it).acc << " "<< (*it).freq_ << "\n";
 	}
+//	for (vector<float>::iterator it = v_time->begin();it<v_time->end();++it){
+//		f_data << *it<< "\n";
+//	}
 	f_data << "];";
 	f_data.close();
+
 }
 
 
@@ -243,7 +225,7 @@ void keyPress(){
 			cout << "Start haptuator:" << endl;
 			mode = SINEWAVE;
 			reset();
-			rt_thread_join(haptuator_thread);
+			start_rt_timer(haptuator_period);
 			break;
 		case 'r':
 			filename = "acc.m";
@@ -271,11 +253,8 @@ void keyPress(){
 
 		case 'q':
 			cout << "Exiting..." << endl;
-			stop_rt_timer();
-			rt_task_delete(maintask);
-
-			printf("MASTER %p ENDS\n", maintask);
 			boost::this_thread::interruption_point();
+			rt_task_delete(rt_task);
 			exit(0);
 			break;
 		default:
@@ -296,11 +275,15 @@ int main(int argc, char *argv[]) {
 	/*
 	 * RTAI
 	 */
+	RT_TASK *task;
+	task = rt_task_init_schmod(nam2num("PERIOD_TASK"), 0, 0, 0, SCHED_FIFO, 0xF);
+	mlockall(MCL_CURRENT | MCL_FUTURE);
 
-	maintask = rt_task_init(nam2num("MAIN"), 1, 0, 0);
-	//	mlockall(MCL_CURRENT | MCL_FUTURE);
-
-
+	// set realtime timer to run in pure periodic mode
+	rt_set_periodic_mode();
+	// start realtime timer and scheduler
+	haptuator_period = nano2count(period_ns);
+	haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000);
 
 	/* DAQ device*/
 	comedi_t *device;
@@ -315,8 +298,8 @@ int main(int argc, char *argv[]) {
 
 	/* Calibration DAQ for haptuator */
 
-	haptuator = new Haptuator(device,COMEDI_AN_OUT_SUB,COMEDI_AN_OUT_1,COMEDI_RANGE);
-	if (COMEDI_ERROR == haptuator->DAQcalibration(COMEDI_AN_OUT_SUB,COMEDI_AN_OUT_1,COMEDI_RANGE)) // Analog output
+	haptuator = new Haptuator(device,COMEDI_AN_OUT_SUB,COMEDI_AN_OUT_0,COMEDI_RANGE);
+	if (COMEDI_ERROR == haptuator->DAQcalibration(COMEDI_AN_OUT_SUB,COMEDI_AN_OUT_0,COMEDI_RANGE)) // Analog output
 	{
 		printf("Error calibrating DAQ board - Analog output\n");
 	}
@@ -360,27 +343,11 @@ int main(int argc, char *argv[]) {
 	printf("Bias voltage Z: %f\n", bias_voltage[2]);
 
 	v_mem = new vector<data>;
-	v_time = new vector<int>;
-	//
+	v_time = new vector<float>;
 
-
-
-
-	// set realtime timer to run in pure periodic mode
-	rt_set_periodic_mode();
-	// start realtime timer and scheduler
-	start_rt_timer(0);
-
-	if (!(haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000))){
-		printf("ERROR IN CREATING THREAD\n");
-		exit(1);
-	}
-
-	//	/* Thread for key press*/
+	/* Thread for key press*/
 	boost::thread key_thread(&keyPress);
 	key_thread.join();
-
-
 
 	return 0;
 }

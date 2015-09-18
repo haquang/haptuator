@@ -1,6 +1,6 @@
 close all;
 clear;
-Fs=100000;
+Fs=10000;
 
 %% Read data file
 run('acc.m');
@@ -8,7 +8,7 @@ acc_x = data(:,1);
 acc_y = data(:,2);
 acc_z = data(:,3);
 acc_sim = data(:,4);
-
+freq = data(:,5);
 NSamples = length(acc_x);
 nfft = 2^nextpow2(NSamples);
 t = (1/Fs)*(1:NSamples);
@@ -56,12 +56,15 @@ t = (1/Fs)*(1:NSamples);
 figure(1)
 subplot(2,1,1);
 plot(t,acc_sim);
+xlim([0,3]);
+ylim([-3,3]);
 subplot(2,1,2);
 plot(t,acc_x,'r');
- hold on;
- plot(t,acc_y,'y');
- hold on;
- plot(t,acc_z,'k');
+hold on;
+plot(t,acc_y,'b');
+hold on;
+plot(t,acc_z,'k');
+xlim([0,3]);
 % hold on
 %plot(t(1:nfft/2),acc_new(1:nfft/2),'k');
 %xlim([0,5]);

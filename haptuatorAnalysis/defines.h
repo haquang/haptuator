@@ -15,6 +15,7 @@
 
 // Channel
 #define COMEDI_AN_OUT_0 0
+#define COMEDI_AN_OUT_1 1
 #define COMEDI_ENC 1
 #define COMEDI_ADC_IN_0 0
 #define COMEDI_ADC_IN_1 2

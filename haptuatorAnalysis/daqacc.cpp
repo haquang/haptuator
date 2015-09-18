@@ -6,6 +6,7 @@
  */
 
 #include "daqacc.h"
+#include "daqdevice.h"
 #include <iostream>
 
 
