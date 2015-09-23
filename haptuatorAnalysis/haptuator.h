@@ -23,9 +23,11 @@ public:
 	float sinewave(float t,float freq,float mag);
 	float customSignal(float t);
 	void setInterpolationParameter(float _A0,vector<float> _Ai,vector<float> _Bi,vector<float> _fi);
-	int renderVibration(float t);
-	int renderVibration(float t,float freq,float mag);
+	int renderVibration(float t); // Driven data
+	int renderVibration(float t,int amp); // Step
+	int renderVibration(float t,float freq,float mag); // Chirp
 	float getAccRender();
+	void reset();
 	virtual ~Haptuator();
 
 private:
@@ -40,6 +42,7 @@ private:
 	int _chanel;
 	int _range_idx = 1;
 	int _aref = AREF_GROUND;
+	bool first_cycle = true;
 
 };
 

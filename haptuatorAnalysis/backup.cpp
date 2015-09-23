@@ -21,7 +21,6 @@
 #include "haptuator.h"
 #include "drivedataparser.h"
 #include "dynamicmodel.h"
-#include "inversedynamicmodel.h"
 
 using namespace std;
 
@@ -38,10 +37,8 @@ const float b3 = 3.083e06;
 const float b4 = 2.636e09;
 
 DynamicModel haptuatormodel;
-InverseDynamicModel inverseHaptuatormodel;
 bool first_cycle=true;
 struct input u;
-struct inputInverse cmd_acc;
 /*
  * RTAI
  */
@@ -82,7 +79,6 @@ float t1 = 0.0f;
 float* acc;
 float T = 0.1; //second;
 float e_prv ;
-inputInverse input_prv;
 #define MAG 1
 /*
  * Memory
@@ -152,16 +148,8 @@ void *haptuator_control(void *arg)
 			haptuator->renderVibration(t,freq,MAG);
 			u.e0 = haptuator->getAccRender();
 			u.e1 = (u.e0 - e_prv) * 1/deltaT;
-			e_prv = u.e0;
+			e_prv = u.e0;	
 			haptuatormodel.run(t,u);
-
-//			cmd_acc.e0 = haptuator->getAccRender();
-//			cmd_acc.e1 = (cmd_acc.e0 - input_prv.e0) * 1/deltaT;
-//			cmd_acc.e2 = (cmd_acc.e1 - input_prv.e1) * 1/deltaT;
-//			cmd_acc.e3 = (cmd_acc.e2 - input_prv.e2) * 1/deltaT;
-//
-//			input_prv = cmd_acc;
-//			inverseHaptuatormodel.run(t,cmd_acc);
 			acc = m_daq_acc->getAcc();
 			v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender(),freq));
 
@@ -198,20 +186,11 @@ void reset(){
 	v_time->clear();
 
 	e_prv = 0;
-	input_prv.e0 = 0;
-	input_prv.e1 = 0;
-	input_prv.e2 = 0;
-	input_prv.e3 = 0;
-
 	u.e0 = 0;
 	u.e1 = 0;
 	haptuatormodel.resetAcc();
 	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
 	haptuator->reset();
-
-	inverseHaptuatormodel.resetAcc();
-	inverseHaptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
-
 	// reintialize thread
 
 	if (!(haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000))){
@@ -360,7 +339,6 @@ void keyPress(){
 int main(int argc, char *argv[]) {
 	bias_voltage = new float(ACC_SIZE);
 	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
-	inverseHaptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
 	cout << "Starting....." << endl;
 
 	/*

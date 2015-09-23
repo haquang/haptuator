@@ -25,6 +25,10 @@ float Haptuator::sinewave(float t,float freq,float mag) {
 	return result;
 }
 
+void Haptuator::reset(){
+	first_cycle = true;
+}
+
 float Haptuator::customSignal(float t) {
 	int i;
 	float result;
@@ -54,6 +58,18 @@ int Haptuator::renderVibration(float t) {
 		return COMEDI_ERROR;
 	else return COMEDI_OK;
 }
+
+int Haptuator::renderVibration(float t,int amp){
+//	if (first_cycle){
+		_acc_render = amp;
+//		first_cycle = false;
+//	} else {
+//		_acc_render = 0;
+//	}
+	if (COMEDI_ERROR == writeData(_subdev,_chanel,_range_idx,_aref,_acc_render))
+		return COMEDI_ERROR;
+	else return COMEDI_OK;
+} 
 
 int Haptuator::renderVibration(float t,float freq,float mag){
 	_acc_render = sinewave(t,freq,mag);
