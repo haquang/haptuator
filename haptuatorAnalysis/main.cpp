@@ -21,27 +21,39 @@
 #include "haptuator.h"
 #include "drivedataparser.h"
 #include "dynamicmodel.h"
-#include "inversedynamicmodel.h"
+
 
 using namespace std;
 
+
 /*
- *
- * Haptuator Model
+ * Haptuator model
  */
 
-const float a1 = -5.422e07;
-const float a2 = 1.151e10;
-const float b1 = 1;
-const float b2 = 9443;
-const float b3 = 3.083e06;
-const float b4 = 2.636e09;
 
-DynamicModel haptuatormodel;
-InverseDynamicModel inverseHaptuatormodel;
-bool first_cycle=true;
-struct input u;
-struct inputInverse cmd_acc;
+float a4 = 0.6361;
+float a3 = -6623;
+float a2 = 1.295e06;
+float a1 = -2.075e08;
+float a0 = 3.433e07;
+float b4 = 1;
+float b3 = 332.8;
+float b2 = 2.795e05;
+float b1 = 7.982e06 ;
+float b0 = 1.301e07;
+
+float gain = -0.0055;
+
+vector<double> a = {a0,a1,a2,a3,a4};
+vector<double> b = {b0,b1,b2,b3,b4};
+
+
+DynamicModel hap_model;
+vector<double> input = {0.0,0.0,0.0,0.0,0.0};
+vector<double> input_prv = {0.0,0.0,0.0,0.0,0.0};
+double u_ctrl;
+runge_kutta4< vector<double> > stepper;
+
 /*
  * RTAI
  */
@@ -77,12 +89,11 @@ float vmax;
 float freq = 100; // Hz
 float f_start = 50;
 float f_end = 500;
-float t = 0.0f;
+double t = 0.0f;
 float t1 = 0.0f;
 float* acc;
 float T = 0.1; //second;
-float e_prv ;
-inputInverse input_prv;
+double deltaT = (double) TIMER_HAPTUATOR / 1000000000;
 #define MAG 1
 /*
  * Memory
@@ -103,7 +114,18 @@ struct data{
 	}
 };
 
+struct ctrlsignal{
+	double t;
+	double ctrl;
+
+	ctrlsignal(double a,double b){
+		t = a;
+		ctrl = b;
+	}
+};
+
 vector<data>* v_mem;
+vector<ctrlsignal>* v_ctrl;
 vector<int>* v_time;
 float* bias_voltage;
 
@@ -142,48 +164,53 @@ void *haptuator_control(void *arg)
 	}
 	exectime = 0.0f;
 	exec_start = rt_get_cpu_time_ns();
-	float deltaT = (float) TIMER_HAPTUATOR / 1000000000;
+
 
 	while(!stop) {
 		t += deltaT;
-		if (t < T){
+		if (t <= T){
 			//freq = f_start*exp((log(f_end)-log(f_start))*t/T);
 			//				v_time->push_back(t);
 			haptuator->renderVibration(t,freq,MAG);
-			u.e0 = haptuator->getAccRender();
-			u.e1 = (u.e0 - e_prv) * 1/deltaT;
-			e_prv = u.e0;
-			haptuatormodel.run(t,u);
+		//	input[0] = haptuator->getAccRender();
+		//	input[1] = (input[0] - input_prv[0]) * 1/deltaT;
+		//	input[2] = (input[1] - input_prv[1]) * 1/deltaT;
+		//	input[3] = (input[2] - input_prv[2]) * 1/deltaT;
+		//	input[4] = (input[3] - input_prv[3]) * 1/deltaT;
+		//	input_prv = input;
+		//	hap_model._input = input;
+		//	stepper.do_step(hap_model,hap_model._output,t,deltaT);
+		//	haptuator->setCtrl(hap_model._output[0]);
 
-//			cmd_acc.e0 = haptuator->getAccRender();
-//			cmd_acc.e1 = (cmd_acc.e0 - input_prv.e0) * 1/deltaT;
-//			cmd_acc.e2 = (cmd_acc.e1 - input_prv.e1) * 1/deltaT;
-//			cmd_acc.e3 = (cmd_acc.e2 - input_prv.e2) * 1/deltaT;
-//
-//			input_prv = cmd_acc;
-//			inverseHaptuatormodel.run(t,cmd_acc);
+			haptuator->setCtrl(gain * haptuator->getAccRender());
+			haptuator->run();
 			acc = m_daq_acc->getAcc();
+
+
+			v_ctrl->push_back(ctrlsignal(t,hap_model._output[0]));
+
 			v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender(),freq));
 
 		} else {
 			stop = true;
 		}
 		rt_task_wait_period();
-		//		exec_end = rt_get_cpu_time_ns();
-		//		v_time->push_back(exec_end - exec_start);
-		//		if (exectime <= abs(exec_end - exec_start)) {
-		//			exectime = abs(exec_end - exec_start);
-		//		}
-		//		exec_start = exec_end;
+//		exec_end = rt_get_cpu_time_ns();
+//		v_time->push_back(exec_end - exec_start);
+//		if (exectime <= abs(exec_end - exec_start)) {
+//			exectime = abs(exec_end - exec_start);
+//		}
+//		exec_start = exec_end;
 
 	}
 	rt_make_soft_real_time();
 	rt_task_delete(rt_task);
 
-	//	for (vector<int>::iterator it = v_time->begin();it<v_time->end();++it){
-	//		printf("Exec time: %d\n",*it);
-	//	}
-	//	printf("THREAD: time = %d\n", exectime);
+//
+//		for (vector<int>::iterator it = v_time->begin();it<v_time->end();++it){
+//			printf("Exec time: %d\n",*it);
+//		}
+//		printf("THREAD: time = %d\n", exectime);
 	printf("THREAD %lu ENDS\n", rt_task);
 
 	return 0;
@@ -193,24 +220,20 @@ void reset(){
 	stop = false;
 	// reset time
 	t = 0.0f;
+
+	input[0] = 0;
+	input[1] = 0;
+	input[2] = 0;
+	input[3] = 0;
+	input[4] = 0;
+
+	input_prv = input;
 	// reset acceleration data
 	v_mem->clear();
 	v_time->clear();
-
-	e_prv = 0;
-	input_prv.e0 = 0;
-	input_prv.e1 = 0;
-	input_prv.e2 = 0;
-	input_prv.e3 = 0;
-
-	u.e0 = 0;
-	u.e1 = 0;
-	haptuatormodel.resetAcc();
-	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
+	v_ctrl->clear();
+	hap_model.initialize(a,b);
 	haptuator->reset();
-
-	inverseHaptuatormodel.resetAcc();
-	inverseHaptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
 
 	// reintialize thread
 
@@ -256,14 +279,14 @@ void flushToFile(string filename){
 
 	// Model
 	filename = "simulation.m";
-	vector<memory> a = haptuatormodel.getAcc();
+
 	if (f_data.is_open())
 		f_data.close();
 
 	f_data.open(filename.c_str(),std::fstream::out);
 	f_data << "data = [";
-	for (vector<memory>::iterator it = a.begin();it<a.end();++it){
-		f_data << (*it).t << " " << (*it).acc <<"\n";
+	for (vector<ctrlsignal>::iterator it = v_ctrl->begin();it<v_ctrl->end();++it){
+		f_data << (*it).t << " " << (*it).ctrl <<"\n";
 	}
 	f_data << "];";
 
@@ -359,8 +382,7 @@ void keyPress(){
 
 int main(int argc, char *argv[]) {
 	bias_voltage = new float(ACC_SIZE);
-	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
-	inverseHaptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
+	hap_model.initialize(a,b);
 	cout << "Starting....." << endl;
 
 	/*
@@ -431,11 +453,9 @@ int main(int argc, char *argv[]) {
 
 	v_mem = new vector<data>;
 	v_time = new vector<int>;
-	//
+	v_ctrl = new vector<ctrlsignal>;
 
-
-
-
+	cout << "Sampling time " << deltaT << " sec " << endl;
 	// set realtime timer to run in pure periodic mode
 	rt_set_periodic_mode();
 	// start realtime timer and scheduler

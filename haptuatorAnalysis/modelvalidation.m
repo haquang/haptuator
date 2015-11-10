@@ -1,9 +1,9 @@
 close all;
 clear;
 %% Model
-run('simulation.m')
-t = data(:,1);
-y = data(:,2);
+%run('simulation.m')
+%t = data(:,1);
+%y = data(:,2);
 
 %% Actual
 run('acc.m')
@@ -15,12 +15,13 @@ freq = data(:,5);
 %% plot
 figure(1)
 %subplot(2,1,1);
-%plot(t,acc_sim);
+plot(acc_sim);
+hold on;
 %ylim([-2,2]);
 %subplot(2,1,2);
-plot(t,acc_x);
-hold on;
-%plot(t,acc_sim * 10,'r');
+plot(acc_x,'--');
 %hold on;
-plot(t,y,'k');
+%plot(t,acc_x,'r');
+%hold on;
+%plot(t,y,'k');
 

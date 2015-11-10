@@ -52,35 +52,34 @@ void Haptuator::setInterpolationParameter(float A0, vector<float> Ai,vector<floa
 	_state = true;
 }
 
-int Haptuator::renderVibration(float t) {
+void Haptuator::renderVibration(double t) {
 	_acc_render = customSignal(t);
-	if (COMEDI_ERROR == writeData(_subdev,_chanel,_range_idx,_aref,_acc_render))
-		return COMEDI_ERROR;
-	else return COMEDI_OK;
 }
 
-int Haptuator::renderVibration(float t,int amp){
-//	if (first_cycle){
+void Haptuator::renderVibration(double t,int amp){
 		_acc_render = amp;
-//		first_cycle = false;
-//	} else {
-//		_acc_render = 0;
-//	}
-	if (COMEDI_ERROR == writeData(_subdev,_chanel,_range_idx,_aref,_acc_render))
-		return COMEDI_ERROR;
-	else return COMEDI_OK;
 } 
 
-int Haptuator::renderVibration(float t,float freq,float mag){
+void Haptuator::renderVibration(double t,float freq,float mag){
 	_acc_render = sinewave(t,freq,mag);
-
-	return writeData(_subdev,_chanel,_range_idx,_aref,_acc_render);
 }
 
-
+int Haptuator::run(){
+	float u;
+	if (_ctrl)
+		u = _ctrl_signal;
+	else
+		u = _acc_render;
+	return writeData(_subdev,_chanel,_range_idx,_aref,u);
+}
 
 float Haptuator::getAccRender() {
 	return _acc_render;
+}
+
+void Haptuator::setCtrl(double acc) {
+	_ctrl_signal = acc;
+	_ctrl = true;
 }
 
 Haptuator::~Haptuator() {

@@ -15,30 +15,16 @@
 #include <queue>
 #include <rtai_posix.h>
 #include <rtai_lxrt.h>
+#include <stdio.h>
 
 #include "daqdevice.h"
 #include "daqacc.h"
 #include "haptuator.h"
 #include "drivedataparser.h"
-#include "dynamicmodel.h"
+
+#define MAG 1
 
 using namespace std;
-
-/*
- *
- * Haptuator Model
- */
-
-const float a1 = -5.422e07;
-const float a2 = 1.151e10;
-const float b1 = 1;
-const float b2 = 9443;
-const float b3 = 3.083e06;
-const float b4 = 2.636e09;
-
-DynamicModel haptuatormodel;
-bool first_cycle=true;
-struct input u;
 /*
  * RTAI
  */
@@ -56,8 +42,13 @@ MODE mode;
 fstream f_data;
 DaqAcc* m_daq_acc;
 Haptuator* haptuator;
-DriveDataParser data_parser;
 boost::asio::io_service t_cali_service;
+
+enum CONTROL_MODE {GAIN,ADAPTIVE};
+
+int Control_Mode = GAIN; // default: gain
+double gain;
+double mag = MAG;
 /*
  * Interpolation
  */
@@ -67,35 +58,34 @@ vector<float> fi;
 float A0;
 float vmin;
 float vmax;
+DriveDataParser data_parser;
 
+vector<float> ref_freq;
+vector<float> ref_gain;
 /*
  * Swept frequency
  */
-float freq = 100; // Hz
+float freq = 50; // Hz
 float f_start = 50;
 float f_end = 500;
-float t = 0.0f;
+double t = 0.0f;
 float t1 = 0.0f;
-float* acc;
-float T = 0.1; //second;
-float e_prv ;
-#define MAG 1
+float* acc_xyz;
+double acc;
+double acc_set;
+float T = 0.5; //second;
+double deltaT = (double) TIMER_HAPTUATOR / 1000000000;
+
 /*
  * Memory
  */
 struct data{
-	float acc_x;
-	float acc_y;
-	float acc_z;
-	float acc;
-	float _freq;
+	double acc_measure;
+	double acc;
 
-	data(float x,float y,float z,float acc_in,float freq){
-		acc_x = x;
-		acc_y = y;
-		acc_z = z;
+	data(double x,double acc_in){
+		acc_measure = x;
 		acc  = acc_in;
-		_freq = freq;
 	}
 };
 
@@ -104,6 +94,19 @@ vector<int>* v_time;
 float* bias_voltage;
 
 Haptuator* hap;
+
+float customSignal(float t) // For recording
+{
+	int i;
+	float result;
+		result = A0/2;
+		for (i = 0;i< Ai.size();i++){
+			result += Ai[i] *cos(2*M_PI*fi[i]*t) + Bi[i]*sin(2*M_PI*fi[i]*t);
+		}
+
+	return result;
+
+}
 
 /*
  * RTAI task for haptuator
@@ -138,44 +141,56 @@ void *haptuator_control(void *arg)
 	}
 	exectime = 0.0f;
 	exec_start = rt_get_cpu_time_ns();
-	float deltaT = (float) TIMER_HAPTUATOR / 1000000000;
+
 
 	while(!stop) {
 		t += deltaT;
-		if (t < T){
-			//freq = f_start*exp((log(f_end)-log(f_start))*t/T);
-			//				v_time->push_back(t);
-			haptuator->renderVibration(t,freq,MAG);
-			u.e0 = haptuator->getAccRender();
-			u.e1 = (u.e0 - e_prv) * 1/deltaT;
-			e_prv = u.e0;	
-			haptuatormodel.run(t,u);
-			acc = m_daq_acc->getAcc();
-			v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender(),freq));
+		if (t <= T){
+			acc_xyz = m_daq_acc->getAcc();
+			//			freq = f_start*exp((log(f_end)-log(f_start))*t/T);
+			//			v_time->push_back(t);
+			acc = (acc_xyz[0]+acc_xyz[1]+acc_xyz[2])/3;
+			//			acc = acc_xyz[2];
+			if (SINEWAVE == mode)
+				haptuator->renderVibration(t,freq,mag);
+			else if (CUSTOM == mode){
+				haptuator->renderVibration(t);
+				acc_set = customSignal(t);
+			}
+
+
+			if (GAIN == Control_Mode)
+				haptuator->setCtrl(gain * haptuator->getAccRender());
+			//				haptuator->setCtrl(haptuator->getAccRender()); // Disable gain for testing
+			haptuator->run();
+			v_mem->push_back(data(acc,acc_set));
 
 		} else {
 			stop = true;
 		}
 		rt_task_wait_period();
-		//		exec_end = rt_get_cpu_time_ns();
-		//		v_time->push_back(exec_end - exec_start);
-		//		if (exectime <= abs(exec_end - exec_start)) {
-		//			exectime = abs(exec_end - exec_start);
-		//		}
-		//		exec_start = exec_end;
+		//exec_end = rt_get_cpu_time_ns();
+		//v_time->push_back(exec_end - exec_start);
+		//if (exectime <= abs(exec_end - exec_start)) {
+		//	exectime = abs(exec_end - exec_start);
+		//}
+		//exec_start = exec_end;
 
 	}
 	rt_make_soft_real_time();
 	rt_task_delete(rt_task);
 
-	//	for (vector<int>::iterator it = v_time->begin();it<v_time->end();++it){
-	//		printf("Exec time: %d\n",*it);
-	//	}
-	//	printf("THREAD: time = %d\n", exectime);
+	//
+	//		for (vector<int>::iterator it = v_time->begin();it<v_time->end();++it){
+	//			printf("Exec time: %d\n",*it);
+	//		}
+	//		printf("THREAD: time = %d\n", exectime);
 	printf("THREAD %lu ENDS\n", rt_task);
 
 	return 0;
 }
+
+
 
 void reset(){
 	stop = false;
@@ -184,12 +199,6 @@ void reset(){
 	// reset acceleration data
 	v_mem->clear();
 	v_time->clear();
-
-	e_prv = 0;
-	u.e0 = 0;
-	u.e1 = 0;
-	haptuatormodel.resetAcc();
-	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
 	haptuator->reset();
 	// reintialize thread
 
@@ -220,32 +229,51 @@ void calibration(const boost::system::error_code& err,boost::asio::deadline_time
  * Flush data to file
  */
 void flushToFile(string filename){
-
-	// Actual device record
 	if (f_data.is_open())
 		f_data.close();
 
 	f_data.open(filename.c_str(),std::fstream::out);
 	f_data << "data = [";
 	for (vector<data>::iterator it = v_mem->begin();it<v_mem->end();++it){
-		f_data << (*it).acc_x << " " << (*it).acc_y << " " << (*it).acc_z << " " << (*it).acc << " " << (*it)._freq <<"\n";
+		f_data << (*it).acc_measure << " " << (*it).acc <<"\n";
 	}
 	f_data << "];";
 	f_data.close();
+}
 
-	// Model
-	filename = "simulation.m";
-	vector<memory> a = haptuatormodel.getAcc();
-	if (f_data.is_open())
-		f_data.close();
+/*
+ * Read file for interpolate
+ */
 
-	f_data.open(filename.c_str(),std::fstream::out);
-	f_data << "data = [";
-	for (vector<memory>::iterator it = a.begin();it<a.end();++it){
-		f_data << (*it).t << " " << (*it).acc <<"\n";
+void readGain(string filename){
+	ifstream ifs(filename.c_str());
+	string line;
+	stringstream split;
+	int s_speed; // number of speed samples
+	int s_freq;  // number of freq
+	float f_val;
+
+	if (ifs) {
+		// read the fourth line for ref_freq
+		getline(ifs,line);
+		split.clear();
+		split << line;
+		while (split >> f_val){
+			ref_freq.push_back(f_val);
+		}
+
+		// read the fourth line for ref_freq
+		getline(ifs,line);
+		split.clear();
+		split << line;
+		while (split >> f_val){
+			ref_gain.push_back(f_val);
+		}
+		return;
+	} else {
+		std::cout << "Error reading file!" << endl;
 	}
-	f_data << "];";
-
+	return;
 }
 
 
@@ -253,9 +281,11 @@ void keyPress(){
 	cout<<"Press <s> to start playing haptuator with sinewave."<<endl;
 	cout<<"Press <t> to start haptuator with custom signal."<<endl;
 	cout<<"Press <r> to save acceleration data."<<endl;
-	cout<<"Press <l> to load the data." << endl;
+	cout<<"Press <l> to load the signal data." << endl;
+	cout<<"Press <g> to load the signal data." << endl;
 	cout<<"Press <q> to exit the program."<<endl;
-	string filename;
+	char filename[255];
+	string file;
 	std::stringstream ss;
 	float speed;
 	char c;
@@ -267,25 +297,38 @@ void keyPress(){
 			cout << "Load default data ? Y/N " << endl;
 			cin >> c;
 			if (c == 'Y' || c == 'y'){
-				filename = "driven_data.txt";
-				cout << "Default driven data file " << filename << endl;
+				file = "driven_data.txt";
+				cout << "Default driven data file " << file << endl;
 			}
 			else
 			{
 				cout << "Filename: " << endl;
-				cin >> filename;
+				cin >> file;
 			}
+
 			cout << "Loading drive data" << endl;
-			if(data_parser.loadData(filename))
+			if(data_parser.loadData(file))
 			{
 				fi = data_parser.getFreq();
-				vmin = data_parser.getMinVel();
-				vmax = data_parser.getMaxVel();
+				A0 =  data_parser.getA0();
+				Ai = data_parser.getA();
+				Bi = data_parser.getB();
+				haptuator->setInterpolationParameter(A0,Ai,Bi,fi);
+				haptuator->disablePSD();
 				cout << "Drive Data loaded! \n";
 			}
-
 			break;
-
+		case 'g':
+			cout << "Load default data for gain interpolation? Y/N";
+			cin >> c;
+			if (c == 'Y' || c == 'y'){
+				file = "gain.txt";
+				readGain(file);
+				haptuator->setGainInterpolation(ref_freq,ref_gain);
+			} else {
+				haptuator->disablePSD();
+			}
+			break;
 		case 's':
 			cout << "Start haptuator:" << endl;
 			mode = SINEWAVE;
@@ -293,27 +336,18 @@ void keyPress(){
 			rt_thread_join(haptuator_thread);
 			break;
 		case 'r':
-			filename = "acc.m";
+			sprintf(filename, "acc.m");
 			flushToFile(filename);
-			cout << "Done recording!" << endl;
+			cout << "Done recording to " << filename << endl;
 			break;
 
 		case 't':
-			cout << "Start playing haptuator" << endl;
+			//			freq += 5;
+			//			cout<< "Freq: " << freq << endl;
+			cout << "Start haptuator:" << endl;
 			mode = CUSTOM;
-			cout << "Put input speed: " << endl;
-			cin >> speed;
-
-			if (speed >= vmax)
-				speed = vmax;
-			else if (speed <= vmin)
-				speed = vmin;
-
-			A0 = data_parser.speedInterpA0(speed);
-			Ai = data_parser.speedInterpA(speed);
-			Bi = data_parser.speedInterpB(speed);
-			haptuator->setInterpolationParameter(A0,Ai,Bi,fi);
-			//			haptuator_thread->start();
+			reset();
+			rt_thread_join(haptuator_thread);
 			break;
 
 		case 'q':
@@ -338,8 +372,78 @@ void keyPress(){
 
 int main(int argc, char *argv[]) {
 	bias_voltage = new float(ACC_SIZE);
-	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
 	cout << "Starting....." << endl;
+	bool argParsed = false;
+	double Km,Bm,am1,am2;
+	double gamma;
+	/*
+	 * Parsing arguments
+	 */
+	int arg = 1;
+
+	if (!strcmp(argv[arg], "-Mode"))
+	{
+		arg++;
+		if (!strcmp(argv[arg], "-Adaptive")){
+
+			Control_Mode = ADAPTIVE;
+			while(arg < argc - 1)
+			{
+				arg++;
+				if(!strcmp(argv[arg], "-Model")) {
+					Km = (double)atof(argv[++arg]);
+					Bm = (double)atof(argv[++arg]);
+					am1 = (double)atof(argv[++arg]);
+					am2 = (double)atof(argv[++arg]);
+					argParsed = true;
+					cout << "Model: " << Km << " " << Bm << " " << am1<< " " << am2 << endl;
+				}
+				else if (!strcmp(argv[arg], "-Gamma"))
+				{
+					gamma = (double)atof(argv[++arg]);
+					argParsed = true;
+					cout << "Gamma: " << gamma << endl;
+				}
+				else if (!strcmp(argv[arg], "-Duration"))
+				{
+					T = (double)atof(argv[++arg]);
+					cout << "Duration: " << T << endl;
+				}
+				else
+				{
+					cerr << "Unrecognized option: " << argv[arg] << endl;
+					exit(1);
+				}
+			}
+		}
+		else if (!strcmp(argv[arg], "-Gain")){
+			Control_Mode = GAIN;
+			gain = (double)atof(argv[++arg]);
+			cout << "Gain: " << gain<< endl;
+			while(arg < argc - 1)
+			{
+				arg++;
+				if(!strcmp(argv[arg], "-magnitude")) {
+					mag = (double)atof(argv[++arg]);
+					cout << "Magnitude: " << mag<< endl;
+				}
+				else if (!strcmp(argv[arg], "-freq"))
+				{
+					freq = (double)atof(argv[++arg]);
+					cout << "Frequency: " << freq<< endl;
+				}
+				else
+				{
+					cerr << "Unrecognized option: " << argv[arg] << endl;
+					exit(1);
+				}
+			}
+
+		} else {
+			cerr << "Unrecognized option: " << argv[arg] << endl;
+			exit(1);
+		}
+	}
 
 	/*
 	 * RTAI
@@ -368,6 +472,7 @@ int main(int argc, char *argv[]) {
 	{
 		printf("Error calibrating DAQ board - Analog output\n");
 	}
+
 	//	haptuator_thread = new HaptuatorThread(haptuator);
 
 	/*
@@ -409,11 +514,7 @@ int main(int argc, char *argv[]) {
 
 	v_mem = new vector<data>;
 	v_time = new vector<int>;
-	//
-
-
-
-
+	cout << "Sampling time " << deltaT << " sec " << endl;
 	// set realtime timer to run in pure periodic mode
 	rt_set_periodic_mode();
 	// start realtime timer and scheduler

@@ -1,0 +1,426 @@
+/*
+ *  This program was created to analyze the performance of haptuator
+ *
+ */
+
+#include <iostream>
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <boost/asio.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/bind.hpp>
+#include <boost/thread.hpp>
+#include <numeric>
+#include <queue>
+#include <rtai_posix.h>
+#include <rtai_lxrt.h>
+
+#include "daqdevice.h"
+#include "daqacc.h"
+#include "haptuator.h"
+#include "drivedataparser.h"
+#include "dynamicmodel.h"
+
+using namespace std;
+
+/*
+ *
+ * Haptuator Model
+ */
+
+
+/*
+ * RTAI
+ */
+
+pthread_t haptuator_thread;
+//static RT_TASK *rt_task;
+RT_TASK *maintask;
+static RTIME period_ns = TIMER_HAPTUATOR;
+RTIME haptuator_period; /* requested timer period, in counts */
+bool stop;
+int exectime;
+enum MODE {SINEWAVE,CUSTOM};
+MODE mode;
+/* Global variable*/
+fstream f_data;
+DaqAcc* m_daq_acc;
+Haptuator* haptuator;
+DriveDataParser data_parser;
+boost::asio::io_service t_cali_service;
+/*
+ * Interpolation
+ */
+vector<float> Ai;
+vector<float> Bi;
+vector<float> fi;
+float A0;
+float vmin;
+float vmax;
+
+/*
+ * Swept frequency
+ */
+float freq = 100; // Hz
+float f_start = 50;
+float f_end = 500;
+float t = 0.0f;
+float t1 = 0.0f;
+float* acc;
+float T = 0.1; //second;
+float e_prv ;
+#define MAG 1
+/*
+ * Memory
+ */
+struct data{
+	float acc_x;
+	float acc_y;
+	float acc_z;
+	float acc;
+	float _freq;
+
+	data(float x,float y,float z,float acc_in,float freq){
+		acc_x = x;
+		acc_y = y;
+		acc_z = z;
+		acc  = acc_in;
+		_freq = freq;
+	}
+};
+
+vector<data>* v_mem;
+vector<int>* v_time;
+float* bias_voltage;
+
+Haptuator* hap;
+
+/*
+ * RTAI task for haptuator
+ */
+void *haptuator_control(void *arg)
+{
+	int retval;
+	RT_TASK *rt_task;
+	RTIME exec_start, exec_end;
+	/*  make this thread LXRT soft realtime */
+	rt_task = rt_task_init_schmod(nam2num("Haptuator"), 1, 0, 0, SCHED_FIFO, 0xF);
+	printf("THREAD INIT:name = %lu, address = %p.\n", rt_task, "Haptuator");
+	mlockall(MCL_CURRENT | MCL_FUTURE);
+
+	// makes task hard real time (default: soft)
+	// uncomment the next line when developing : develop in soft real time mode
+	rt_make_hard_real_time();
+
+	haptuator_period = nano2count(period_ns);
+	/* make task periodic, starting one cycle from now */
+	retval = rt_task_make_periodic(rt_task,
+			rt_get_time() + haptuator_period, haptuator_period);
+	if (0 != retval) {
+		if (-EINVAL == retval) {
+			/* task structure is already in use */
+			rt_printk("periodic task: task structure is invalid\n");
+		} else {
+			/* unknown error */
+			rt_printk("periodic task: error starting task\n");
+		}
+		return 0;
+	}
+	exectime = 0.0f;
+	exec_start = rt_get_cpu_time_ns();
+	float deltaT = (float) TIMER_HAPTUATOR / 1000000000;
+
+	while(!stop) {
+		t += deltaT;
+		if (t < T){
+			//freq = f_start*exp((log(f_end)-log(f_start))*t/T);
+			//				v_time->push_back(t);
+			haptuator->renderVibration(t,freq,MAG);
+			u.e0 = haptuator->getAccRender();
+			u.e1 = (u.e0 - e_prv) * 1/deltaT;
+			e_prv = u.e0;	
+			haptuatormodel.run(t,u);
+			acc = m_daq_acc->getAcc();
+			v_mem->push_back(data(acc[0],acc[1],acc[2],haptuator->getAccRender(),freq));
+
+		} else {
+			stop = true;
+		}
+		rt_task_wait_period();
+		//		exec_end = rt_get_cpu_time_ns();
+		//		v_time->push_back(exec_end - exec_start);
+		//		if (exectime <= abs(exec_end - exec_start)) {
+		//			exectime = abs(exec_end - exec_start);
+		//		}
+		//		exec_start = exec_end;
+
+	}
+	rt_make_soft_real_time();
+	rt_task_delete(rt_task);
+
+	//	for (vector<int>::iterator it = v_time->begin();it<v_time->end();++it){
+	//		printf("Exec time: %d\n",*it);
+	//	}
+	//	printf("THREAD: time = %d\n", exectime);
+	printf("THREAD %lu ENDS\n", rt_task);
+
+	return 0;
+}
+
+void reset(){
+	stop = false;
+	// reset time
+	t = 0.0f;
+	// reset acceleration data
+	v_mem->clear();
+	v_time->clear();
+
+	e_prv = 0;
+	u.e0 = 0;
+	u.e1 = 0;
+	haptuatormodel.resetAcc();
+	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
+	haptuator->reset();
+	// reintialize thread
+
+	if (!(haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000))){
+		printf("ERROR IN CREATING THREAD\n");
+		exit(1);
+	}
+}
+/*
+ * Calibration function for accelerator
+ */
+/*
+ * Calibration function for accelerator
+ */
+void calibration(const boost::system::error_code& err,boost::asio::deadline_timer* t)
+{
+	if (err)
+		return;
+	if (!m_daq_acc->getCalibrationMode()){
+		printf("Finished calibration\n");
+	} else {
+		m_daq_acc->calibration();
+		t->async_wait(boost::bind(calibration,boost::asio::placeholders::error,t));
+	}
+}
+
+/*
+ * Flush data to file
+ */
+void flushToFile(string filename){
+
+	// Actual device record
+	if (f_data.is_open())
+		f_data.close();
+
+	f_data.open(filename.c_str(),std::fstream::out);
+	f_data << "data = [";
+	for (vector<data>::iterator it = v_mem->begin();it<v_mem->end();++it){
+		f_data << (*it).acc_x << " " << (*it).acc_y << " " << (*it).acc_z << " " << (*it).acc << " " << (*it)._freq <<"\n";
+	}
+	f_data << "];";
+	f_data.close();
+
+	// Model
+	filename = "simulation.m";
+	vector<memory> a = haptuatormodel.getAcc();
+	if (f_data.is_open())
+		f_data.close();
+
+	f_data.open(filename.c_str(),std::fstream::out);
+	f_data << "data = [";
+	for (vector<memory>::iterator it = a.begin();it<a.end();++it){
+		f_data << (*it).t << " " << (*it).acc <<"\n";
+	}
+	f_data << "];";
+
+}
+
+
+void keyPress(){
+	cout<<"Press <s> to start playing haptuator with sinewave."<<endl;
+	cout<<"Press <t> to start haptuator with custom signal."<<endl;
+	cout<<"Press <r> to save acceleration data."<<endl;
+	cout<<"Press <l> to load the data." << endl;
+	cout<<"Press <q> to exit the program."<<endl;
+	string filename;
+	std::stringstream ss;
+	float speed;
+	char c;
+	char lastKey;
+	while (true) {
+		cin >> lastKey;
+		switch ( lastKey ) {
+		case 'l':
+			cout << "Load default data ? Y/N " << endl;
+			cin >> c;
+			if (c == 'Y' || c == 'y'){
+				filename = "driven_data.txt";
+				cout << "Default driven data file " << filename << endl;
+			}
+			else
+			{
+				cout << "Filename: " << endl;
+				cin >> filename;
+			}
+			cout << "Loading drive data" << endl;
+			if(data_parser.loadData(filename))
+			{
+				fi = data_parser.getFreq();
+				vmin = data_parser.getMinVel();
+				vmax = data_parser.getMaxVel();
+				cout << "Drive Data loaded! \n";
+			}
+
+			break;
+
+		case 's':
+			cout << "Start haptuator:" << endl;
+			mode = SINEWAVE;
+			reset();
+			rt_thread_join(haptuator_thread);
+			break;
+		case 'r':
+			filename = "acc.m";
+			flushToFile(filename);
+			cout << "Done recording!" << endl;
+			break;
+
+		case 't':
+			cout << "Start playing haptuator" << endl;
+			mode = CUSTOM;
+			cout << "Put input speed: " << endl;
+			cin >> speed;
+
+			if (speed >= vmax)
+				speed = vmax;
+			else if (speed <= vmin)
+				speed = vmin;
+
+			A0 = data_parser.speedInterpA0(speed);
+			Ai = data_parser.speedInterpA(speed);
+			Bi = data_parser.speedInterpB(speed);
+			haptuator->setInterpolationParameter(A0,Ai,Bi,fi);
+			//			haptuator_thread->start();
+			break;
+
+		case 'q':
+			cout << "Exiting..." << endl;
+			stop_rt_timer();
+			rt_task_delete(maintask);
+
+			printf("MASTER %p ENDS\n", maintask);
+			boost::this_thread::interruption_point();
+			exit(0);
+			break;
+		default:
+			break;
+		}
+	}
+
+}
+
+/*
+ * MAIN PROGRAM
+ */
+
+int main(int argc, char *argv[]) {
+	bias_voltage = new float(ACC_SIZE);
+	haptuatormodel.initialization(a1,a2,b1,b2,b3,b4);
+	cout << "Starting....." << endl;
+
+	/*
+	 * RTAI
+	 */
+
+	maintask = rt_task_init(nam2num("MAIN"), 1, 0, 0);
+	//	mlockall(MCL_CURRENT | MCL_FUTURE);
+
+
+
+	/* DAQ device*/
+	comedi_t *device;
+	/* Connect to DAQ board*/
+	device = comedi_open(COMEDI_DEFAULT_DEVIVE);
+	if(device == NULL){
+		printf("Error connecting DAQ board\n");
+		return -1;
+	} else {
+		printf("Connected to DAQ board\n");
+	}
+
+	/* Calibration DAQ for haptuator */
+
+	haptuator = new Haptuator(device,COMEDI_AN_OUT_SUB,COMEDI_AN_OUT_1,COMEDI_RANGE);
+	if (COMEDI_ERROR == haptuator->DAQcalibration(COMEDI_AN_OUT_SUB,COMEDI_AN_OUT_1,COMEDI_RANGE)) // Analog output
+	{
+		printf("Error calibrating DAQ board - Analog output\n");
+	}
+	//	haptuator_thread = new HaptuatorThread(haptuator);
+
+	/*
+	 * Calibrating Accelerator
+	 */
+	int* chanel_list = new int(ACC_SIZE);
+	chanel_list[0] = COMEDI_ADC_IN_0;
+	chanel_list[1] = COMEDI_ADC_IN_1;
+	chanel_list[2] = COMEDI_ADC_IN_2;
+
+	m_daq_acc = new DaqAcc(device,COMEDI_AN_IN_SUB,chanel_list,ACC_POWER_SUPPLY_PORT,COMEDI_RANGE);
+
+	if (COMEDI_ERROR == m_daq_acc->DaqCalibration())
+	{
+		printf("Error calibrating DAQ board\n");
+	}
+	if (COMEDI_ERROR == m_daq_acc->readSupplyVoltage()){
+		printf("Error reading power supply voltage for Acc calibration\n");
+	} else {
+		printf("Input voltage: %f\n", m_daq_acc->getSupplyVoltage());
+	}
+
+	cout << "Calibrating accelerometer" << endl;
+	m_daq_acc->setCalibrationMode();
+
+	/*Timer for calibration*/
+
+	boost::asio::deadline_timer timer_cali(t_cali_service, boost::posix_time::microseconds(1000));
+	timer_cali.async_wait(boost::bind(calibration,boost::asio::placeholders::error, &timer_cali));
+
+	m_daq_acc->setCalibrationMode();
+	t_cali_service.run();
+	while (m_daq_acc->getCalibrationMode()){}
+
+	bias_voltage = m_daq_acc->getBiasVol();
+	printf("Bias voltage X: %f\n", bias_voltage[0]);
+	printf("Bias voltage Y: %f\n", bias_voltage[1]);
+	printf("Bias voltage Z: %f\n", bias_voltage[2]);
+
+	v_mem = new vector<data>;
+	v_time = new vector<int>;
+	//
+
+
+
+
+	// set realtime timer to run in pure periodic mode
+	rt_set_periodic_mode();
+	// start realtime timer and scheduler
+	start_rt_timer(0);
+
+	if (!(haptuator_thread = rt_thread_create(haptuator_control, NULL, 10000))){
+		printf("ERROR IN CREATING THREAD\n");
+		exit(1);
+	}
+
+	//	/* Thread for key press*/
+	boost::thread key_thread(&keyPress);
+	key_thread.join();
+
+
+
+	return 0;
+}
+

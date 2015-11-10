@@ -16,6 +16,11 @@
 
 using namespace std;
 
+/*
+ *
+ * Haptuator Model
+ */
+
 class Haptuator : public DaqDevice{
 public:
 	Haptuator();
@@ -23,26 +28,33 @@ public:
 	float sinewave(float t,float freq,float mag);
 	float customSignal(float t);
 	void setInterpolationParameter(float _A0,vector<float> _Ai,vector<float> _Bi,vector<float> _fi);
-	int renderVibration(float t); // Driven data
-	int renderVibration(float t,int amp); // Step
-	int renderVibration(float t,float freq,float mag); // Chirp
+	void renderVibration(double t); // Driven data
+	void renderVibration(double t,int amp); // Step
+	void renderVibration(double t,float freq,float mag); // Chirp
+	int run();
 	float getAccRender();
 	void reset();
+	void setCtrl(double acc);
+
 	virtual ~Haptuator();
 
 private:
 	bool _state = false;
+	bool _ctrl = false;
+
 	float _A0;
 	vector<float> _Ai;
 	vector<float> _Bi;
 	vector<float> _fi;
-
 	float _acc_render;
+	double _ctrl_signal;
+	float _u;
 	int _subdev;
 	int _chanel;
 	int _range_idx = 1;
 	int _aref = AREF_GROUND;
 	bool first_cycle = true;
+	float _deltaT = (float) TIMER_HAPTUATOR / 1000000000;
 
 };
 
