@@ -29,6 +29,8 @@
 #define TIMER_RECORD 1000
 #define ACC_SIZE 3
 
+// FOR FOURIER TRANSFORM
+#define BLOCK_SIZE 400   // This value must be the same with block size of FFT in matlab analysis
 
 // SPEED 
 
@@ -40,6 +42,7 @@
 #define TIMER_UPDATE_FREQ 5000000
 #define GRAVITY 9.81
 
+#define SAMPLING 10000
 
 // REFERENCE MODEL
 

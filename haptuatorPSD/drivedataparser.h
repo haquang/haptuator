@@ -21,6 +21,7 @@ public:
 	bool loadData(string filename);
 	vector<float> getRefSpeed();
 	vector<float> getFreq();
+	vector<float> getPsd();
 	float interp1d(float val,vector<float> input,vector<float> out);
 	float speedInterpA0(float speed); // A0
 	vector<float> speedInterpA(float speed); // A
@@ -36,12 +37,14 @@ public:
 private:
 	vector<float> ref_speed; // Reference speed
 	vector<float> freq; // frequency
+	vector<float> Psd; // frequency
 	float vmin,vmax;
 	vector<vector<float> > acc_signal;
 
 	vector<float> A0;
 	vector<vector<float> > A;
 	vector<vector<float> > B;
+
 
 	gsl_interp_accel *_gsl_acc;
 	gsl_spline *_gsl_spline;

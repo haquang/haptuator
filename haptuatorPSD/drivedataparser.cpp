@@ -83,10 +83,19 @@ bool DriveDataParser::loadData(string filename) {
 		getline(ifs,line);
 		split.clear();
 		split.str(line);
-		//			vector<float> v;
+		v.clear();
 		while (split >> f_val)
 			v.push_back(f_val);
 		B.push_back(v);
+
+		// PSD
+		getline(ifs,line);
+		split.clear();
+		split.str(line);
+		while (split >> f_val){
+			Psd.push_back(f_val);
+		}
+
 		//		}
 
 		//		_gsl_acc = gsl_interp_accel_alloc ();
@@ -168,4 +177,8 @@ vector<float> DriveDataParser::getB() {
 
 float DriveDataParser::getA0() {
 	return A0.at(0);
+}
+
+vector<float> DriveDataParser::getPsd(){
+	return Psd;
 }

@@ -36,7 +36,7 @@ static RTIME period_ns = TIMER_HAPTUATOR;
 RTIME haptuator_period; /* requested timer period, in counts */
 bool stop;
 int exectime;
-enum MODE {SINEWAVE,CUSTOM};
+enum MODE {SINEWAVE,RECTWAVE,TRIANGLEWAVE,CUSTOM};
 MODE mode;
 /* Global variable*/
 fstream f_data;
@@ -44,7 +44,7 @@ DaqAcc* m_daq_acc;
 Haptuator* haptuator;
 boost::asio::io_service t_cali_service;
 
-enum CONTROL_MODE {GAIN,ADAPTIVE};
+enum CONTROL_MODE {GAIN,PSD};
 
 int Control_Mode = GAIN; // default: gain
 double gain;
@@ -55,6 +55,7 @@ double mag = MAG;
 vector<float> Ai;
 vector<float> Bi;
 vector<float> fi;
+vector<float> Psd;
 float A0;
 float vmin;
 float vmax;
@@ -65,9 +66,9 @@ vector<float> ref_gain;
 /*
  * Swept frequency
  */
-float freq = 50; // Hz
-float f_start = 50;
-float f_end = 500;
+double freq = 50; // Hz
+double f_start = 50;
+double f_end = 500;
 double t = 0.0f;
 float t1 = 0.0f;
 float* acc_xyz;
@@ -82,10 +83,12 @@ double deltaT = (double) TIMER_HAPTUATOR / 1000000000;
 struct data{
 	double acc_measure;
 	double acc;
+	double psd;
 
-	data(double x,double acc_in){
+	data(double x,double acc_in,double psdin){
 		acc_measure = x;
 		acc  = acc_in;
+		psd = psdin;
 	}
 };
 
@@ -99,10 +102,10 @@ float customSignal(float t) // For recording
 {
 	int i;
 	float result;
-		result = A0/2;
-		for (i = 0;i< Ai.size();i++){
-			result += Ai[i] *cos(2*M_PI*fi[i]*t) + Bi[i]*sin(2*M_PI*fi[i]*t);
-		}
+	result = A0/2;
+	for (i = 0;i< Ai.size();i++){
+		result += Ai[i] *cos(2*M_PI*fi[i]*t) + Bi[i]*sin(2*M_PI*fi[i]*t);
+	}
 
 	return result;
 
@@ -151,19 +154,29 @@ void *haptuator_control(void *arg)
 			//			v_time->push_back(t);
 			acc = (acc_xyz[0]+acc_xyz[1]+acc_xyz[2])/3;
 			//			acc = acc_xyz[2];
-			if (SINEWAVE == mode)
-				haptuator->renderVibration(t,freq,mag);
-			else if (CUSTOM == mode){
+
+			if (CUSTOM == mode){
 				haptuator->renderVibration(t);
-				acc_set = customSignal(t);
+				acc_set = customSignal(t);		// Just for recording
+			} else {
+				haptuator->renderVibration(t,freq,mag,mode);
+				acc_set = haptuator->getAccRender();
 			}
-
-
 			if (GAIN == Control_Mode)
 				haptuator->setCtrl(gain * haptuator->getAccRender());
-			//				haptuator->setCtrl(haptuator->getAccRender()); // Disable gain for testing
+			else if (PSD == Control_Mode){
+				haptuator->setAcc(acc); 
+				haptuator->updatePSD();
+				haptuator->setCtrl(gain * haptuator->getAccRender()); // Still using additional gain
+			}
 			haptuator->run();
-			v_mem->push_back(data(acc,acc_set));
+			vector<double> tmpower;
+			tmpower = haptuator->getPowrSpetrum();
+			if (!tmpower.empty())
+			{
+				v_mem->push_back(data(acc,acc_set,tmpower[2]));
+			}
+			
 
 		} else {
 			stop = true;
@@ -229,13 +242,17 @@ void calibration(const boost::system::error_code& err,boost::asio::deadline_time
  * Flush data to file
  */
 void flushToFile(string filename){
+
+	vector<double> power;
+	power = haptuator->getPowrSpetrum();
+
 	if (f_data.is_open())
 		f_data.close();
 
 	f_data.open(filename.c_str(),std::fstream::out);
 	f_data << "data = [";
 	for (vector<data>::iterator it = v_mem->begin();it<v_mem->end();++it){
-		f_data << (*it).acc_measure << " " << (*it).acc <<"\n";
+		f_data << (*it).acc_measure << " " << (*it).acc << " " << (*it).psd <<"\n";
 	}
 	f_data << "];";
 	f_data.close();
@@ -279,6 +296,9 @@ void readGain(string filename){
 
 void keyPress(){
 	cout<<"Press <s> to start playing haptuator with sinewave."<<endl;
+	cout<<"Press <c> to start playing haptuator with rectangle wave."<<endl;
+	cout<<"Press <e> to start playing haptuator with triangle wave."<<endl;
+	cout<<"Press <i> to increase frequency by 5 Hz."<<endl;
 	cout<<"Press <t> to start haptuator with custom signal."<<endl;
 	cout<<"Press <r> to save acceleration data."<<endl;
 	cout<<"Press <l> to load the signal data." << endl;
@@ -313,7 +333,9 @@ void keyPress(){
 				A0 =  data_parser.getA0();
 				Ai = data_parser.getA();
 				Bi = data_parser.getB();
+				Psd = data_parser.getPsd();
 				haptuator->setInterpolationParameter(A0,Ai,Bi,fi);
+				haptuator->setPSD(Psd);
 				haptuator->disablePSD();
 				cout << "Drive Data loaded! \n";
 			}
@@ -335,15 +357,31 @@ void keyPress(){
 			reset();
 			rt_thread_join(haptuator_thread);
 			break;
+
+		case 'c':
+			cout << "Start haptuator:" << endl;
+			mode = RECTWAVE;
+			reset();
+			rt_thread_join(haptuator_thread);
+			break;
+
+		case 'e':
+			cout << "Start haptuator:" << endl;
+			mode = TRIANGLEWAVE;
+			reset();
+			rt_thread_join(haptuator_thread);
+			break;
 		case 'r':
-			sprintf(filename, "acc.m");
+			sprintf(filename, "acc%03.0f.m", freq);
 			flushToFile(filename);
 			cout << "Done recording to " << filename << endl;
 			break;
-
+		case 'i':
+			freq += 5;
+			cout<< "Freq: " << freq << endl;
+			break;
 		case 't':
-			//			freq += 5;
-			//			cout<< "Freq: " << freq << endl;
+
 			cout << "Start haptuator:" << endl;
 			mode = CUSTOM;
 			reset();
@@ -384,37 +422,11 @@ int main(int argc, char *argv[]) {
 	if (!strcmp(argv[arg], "-Mode"))
 	{
 		arg++;
-		if (!strcmp(argv[arg], "-Adaptive")){
+		if (!strcmp(argv[arg], "-Psd")){
 
-			Control_Mode = ADAPTIVE;
-			while(arg < argc - 1)
-			{
-				arg++;
-				if(!strcmp(argv[arg], "-Model")) {
-					Km = (double)atof(argv[++arg]);
-					Bm = (double)atof(argv[++arg]);
-					am1 = (double)atof(argv[++arg]);
-					am2 = (double)atof(argv[++arg]);
-					argParsed = true;
-					cout << "Model: " << Km << " " << Bm << " " << am1<< " " << am2 << endl;
-				}
-				else if (!strcmp(argv[arg], "-Gamma"))
-				{
-					gamma = (double)atof(argv[++arg]);
-					argParsed = true;
-					cout << "Gamma: " << gamma << endl;
-				}
-				else if (!strcmp(argv[arg], "-Duration"))
-				{
-					T = (double)atof(argv[++arg]);
-					cout << "Duration: " << T << endl;
-				}
-				else
-				{
-					cerr << "Unrecognized option: " << argv[arg] << endl;
-					exit(1);
-				}
-			}
+			Control_Mode = PSD;
+			gain = (double)atof(argv[++arg]);
+			cout << "Gain: " << gain<< endl;
 		}
 		else if (!strcmp(argv[arg], "-Gain")){
 			Control_Mode = GAIN;

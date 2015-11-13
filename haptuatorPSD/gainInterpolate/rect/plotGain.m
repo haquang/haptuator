@@ -1,8 +1,8 @@
-close all;
+%close all;
 clear;
-f = NaN(35,1);
-K = NaN(35,1);
-for i = 0:35
+f = NaN(40,1);
+K = NaN(40,1);
+for i = 0:40
     if (i < 10)
         input = strcat('/home/haquang/workspace/rtai/haptuator/haptuatorAdaptiveControl/acc0',num2str(50+i*5) , '.m')
     else 
@@ -17,8 +17,9 @@ for i = 0:35
     K(i+1) = max_x/max_r;
 
 end
-dlmwrite('driven_data.txt',A0','delimiter','\t','precision',5,'-append');
-dlmwrite('driven_data.txt',F,'delimiter','\t','precision',5,'-append');
+dlmwrite('gain.txt',f','delimiter','\t','precision',5,'-append');
+dlmwrite('gain.txt',K','delimiter','\t','precision',5,'-append');
+% dlmwrite('gain.txt',K,'delimiter','\t','precision',5,'-append');
 
 figure(1);
 plot(f,K,'r-*');
